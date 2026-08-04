@@ -8,3 +8,7 @@ backend/database.sqlite
 backend/uploads/
 .DS_Store
 *.log
+
+# 构建产物
+release/
+.stage/
