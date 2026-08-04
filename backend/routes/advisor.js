@@ -704,16 +704,23 @@ router.get('/communications', async (req, res) => {
   }
 });
 
-// POST /communications - 新增沟通
-router.post('/communications', async (req, res) => {
+// POST /communications - 新增沟通（支持附件上传）
+router.post('/communications', leaveImageUpload.array('attachments', 5), async (req, res) => {
   try {
     const { student_id, date, method, content, feedback } = req.body;
     const db = await getDb();
+    
+    // 处理附件
+    let attachments = null;
+    if (req.files && req.files.length > 0) {
+      attachments = req.files.map(f => f.filename).join(',');
+    }
+    
     const result = await db.run(
-      'INSERT INTO communications (student_id, date, method, content, feedback) VALUES (?, ?, ?, ?, ?)',
-      [student_id, date, method, content, feedback]
+      'INSERT INTO communications (student_id, date, method, content, feedback, attachments) VALUES (?, ?, ?, ?, ?, ?)',
+      [student_id, date, method, content, feedback, attachments]
     );
-    sendResponse(res, { id: result.lastID });
+    sendResponse(res, { id: result.lastID, attachments });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }

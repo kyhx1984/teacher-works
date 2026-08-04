@@ -42,6 +42,20 @@
         </el-table-column>
         <el-table-column prop="content" label="沟通内容" show-overflow-tooltip />
         <el-table-column prop="feedback" label="家长反馈" show-overflow-tooltip />
+        <el-table-column label="附件" width="100">
+          <template #default="scope">
+            <el-button 
+              v-if="scope.row.attachments" 
+              link 
+              type="primary" 
+              size="small"
+              @click="viewAttachments(scope.row)"
+            >
+              查看附件
+            </el-button>
+            <span v-else class="text-muted">无</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="100" fixed="right">
           <template #default="scope">
             <el-popconfirm title="确定删除该沟通记录吗？" @confirm="handleDelete(scope.row.id)">
@@ -95,6 +109,22 @@
         <el-form-item label="家长反馈">
           <el-input type="textarea" :rows="3" v-model="form.feedback" placeholder="家长的反馈意见" />
         </el-form-item>
+        <el-form-item label="附件">
+          <el-upload
+            v-model:file-list="form.attachments"
+            :auto-upload="false"
+            :limit="5"
+            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx"
+            multiple
+          >
+            <el-button type="primary" plain>
+              <el-icon><Upload /></el-icon>选择文件
+            </el-button>
+            <template #tip>
+              <div class="el-upload__tip">支持图片、PDF、Word、Excel，最多5个文件</div>
+            </template>
+          </el-upload>
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -102,6 +132,22 @@
           <el-button type="primary" :loading="saving" @click="handleSave">确定</el-button>
         </span>
       </template>
+    </el-dialog>
+
+    <!-- 查看附件对话框 -->
+    <el-dialog v-model="attachmentsVisible" title="附件列表" width="600px">
+      <div class="attachments-list">
+        <div v-for="(file, index) in attachmentFiles" :key="index" class="attachment-item">
+          <el-icon><Document /></el-icon>
+          <span class="file-name">{{ file.name }}</span>
+          <el-button link type="primary" size="small" @click="downloadFile(file)">
+            下载
+          </el-button>
+        </div>
+        <div v-if="attachmentFiles.length === 0" class="text-muted">
+          暂无附件
+        </div>
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -126,7 +172,11 @@ const filtered = ref([])
 const students = ref([])
 const formRef = ref()
 
-const form = ref({ student_id: null, date: '', method: '电话', content: '', feedback: '' })
+const form = ref({ student_id: null, date: '', method: '电话', content: '', feedback: '', attachments: [] })
+
+// 附件查看相关
+const attachmentsVisible = ref(false)
+const attachmentFiles = ref([])
 
 // 沟通表单校验规则
 const communicationRules = {
@@ -166,7 +216,7 @@ const filterList = () => {
 
 const openCreate = () => {
   const today = new Date().toISOString().slice(0, 10)
-  form.value = { student_id: null, date: today, method: '电话', content: '', feedback: '' }
+  form.value = { student_id: null, date: today, method: '电话', content: '', feedback: '', attachments: [] }
   dialogVisible.value = true
   nextTick(() => {
     formRef.value?.clearValidate()
@@ -197,7 +247,24 @@ const handleSave = async () => {
   }
   saving.value = true
   try {
-    await createCommunication({ ...form.value })
+    // 构建 FormData 以支持文件上传
+    const formData = new FormData()
+    formData.append('student_id', form.value.student_id)
+    formData.append('date', form.value.date)
+    formData.append('method', form.value.method)
+    formData.append('content', form.value.content)
+    formData.append('feedback', form.value.feedback || '')
+    
+    // 添加附件文件
+    if (form.value.attachments && form.value.attachments.length > 0) {
+      form.value.attachments.forEach(file => {
+        if (file.raw) {
+          formData.append('attachments', file.raw)
+        }
+      })
+    }
+    
+    await createCommunication(formData)
     ElMessage.success('登记成功')
     dialogVisible.value = false
     loadData()
@@ -243,6 +310,27 @@ const handleBatchDelete = async () => {
   } catch (e) {
     // 拦截器已提示
   }
+}
+
+// 查看附件
+const viewAttachments = (row) => {
+  if (!row.attachments) {
+    ElMessage.warning('该记录没有附件')
+    return
+  }
+  // 解析附件字符串（逗号分隔的文件名）
+  const files = row.attachments.split(',').filter(f => f.trim())
+  attachmentFiles.value = files.map(filename => ({
+    name: filename,
+    path: filename
+  }))
+  attachmentsVisible.value = true
+}
+
+// 下载附件
+const downloadFile = (file) => {
+  const url = `/uploads/${file.path}`
+  window.open(url, '_blank')
 }
 
 onMounted(loadData)

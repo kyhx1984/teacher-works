@@ -35,7 +35,22 @@ async function initDb() {
       title TEXT,
       type TEXT,
       content TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      resource_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (resource_id) REFERENCES resources(id)
+    );
+
+    -- 考试记录表：关联考试和学生，存储每次考试的成绩、评语等
+    CREATE TABLE IF NOT EXISTS exam_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      exam_id INTEGER,
+      student_id INTEGER,
+      score REAL,
+      comment TEXT,
+      remark TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (exam_id) REFERENCES exams(id),
+      FOREIGN KEY (student_id) REFERENCES students(id)
     );
 
     CREATE TABLE IF NOT EXISTS recitations (
@@ -125,6 +140,16 @@ async function initDb() {
   try {
     await db.run('ALTER TABLE leaves ADD COLUMN image_path TEXT');
   } catch (e) { /* image_path 列已存在，忽略 */ }
+
+  // 为已存在的 exams 表追加 resource_id 列（关联资源表）
+  try {
+    await db.run('ALTER TABLE exams ADD COLUMN resource_id INTEGER');
+  } catch (e) { /* resource_id 列已存在，忽略 */ }
+
+  // 为已存在的 communications 表追加 attachments 列（存储附件文件名，逗号分隔）
+  try {
+    await db.run('ALTER TABLE communications ADD COLUMN attachments TEXT');
+  } catch (e) { /* attachments 列已存在，忽略 */ }
 
   // 插入默认教师名称（仅首次初始化时）
   const existing = await db.get("SELECT key FROM settings WHERE key = 'teacher_name'");

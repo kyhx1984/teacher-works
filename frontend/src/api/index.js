@@ -17,7 +17,17 @@ export const deleteResource = (id) => request.delete(`/resources/${id}`)
 // ================= 试卷管理 =================
 export const getExams = () => request.get('/exams')
 export const createExam = (data) => request.post('/exams', data)
+export const updateExam = (id, data) => request.put(`/exams/${id}`, data)
 export const deleteExam = (id) => request.delete(`/exams/${id}`)
+
+// ================= 考试记录 =================
+export const getExamRecords = (examId) => request.get(`/exam-records?exam_id=${examId}`)
+export const createExamRecord = (data) => request.post('/exam-records', data)
+export const updateExamRecord = (id, data) => request.put(`/exam-records/${id}`, data)
+export const deleteExamRecord = (id) => request.delete(`/exam-records/${id}`)
+export const exportExamTemplate = (examId) => request.get(`/exam-records/template?exam_id=${examId}`, { responseType: 'blob' })
+export const exportExamData = (examId) => request.get(`/exam-records/export?exam_id=${examId}`, { responseType: 'blob' })
+export const importExamRecords = (formData) => request.post('/exam-records/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
 // ================= 背书管理 =================
 export const getRecitations = () => request.get('/recitations')
@@ -67,7 +77,7 @@ export const updateEvaluation = (id, data) => request.put(`/evaluations/${id}`, 
 
 // ================= 家校沟通 =================
 export const getCommunications = () => request.get('/communications')
-export const createCommunication = (data) => request.post('/communications', data)
+export const createCommunication = (formData) => request.post('/communications', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const deleteCommunication = (id) => request.delete(`/communications/${id}`)
 export const batchDeleteCommunications = (ids) => request.delete('/communications/batch', { data: { ids } })
 

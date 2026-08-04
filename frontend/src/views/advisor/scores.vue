@@ -1,13 +1,100 @@
 <template>
   <div class="scores-container">
+    <!-- 筛选条件 -->
     <el-card shadow="never" class="mb-16">
       <template #header>
         <div class="card-title-row">
-          <span>成绩进退分析</span>
-          <el-button type="primary" @click="importVisible = true">
-            <el-icon><Download /></el-icon>Excel导入成绩
-          </el-button>
+          <span>成绩分析</span>
+          <div class="action-buttons">
+            <el-button type="primary" @click="importVisible = true">
+              <el-icon><Download /></el-icon>Excel导入成绩
+            </el-button>
+          </div>
         </div>
+      </template>
+      <el-form :inline="true" :model="filterForm" class="filter-form">
+        <el-form-item label="考试名称">
+          <el-select v-model="filterForm.exam_name" placeholder="全部考试" clearable @change="applyFilter">
+            <el-option v-for="name in examNames" :key="name" :label="name" :value="name" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="科目">
+          <el-select v-model="filterForm.subject" placeholder="全部科目" clearable @change="applyFilter">
+            <el-option v-for="subj in subjects" :key="subj" :label="subj" :value="subj" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="学生">
+          <el-select 
+            v-model="filterForm.student_ids" 
+            placeholder="选择学生（可多选）" 
+            multiple 
+            clearable 
+            filterable
+            @change="applyFilter"
+            style="width: 240px"
+          >
+            <el-option v-for="s in students" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
+          <el-button @click="resetFilter">重置</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <!-- 班级统计概览 -->
+    <el-card shadow="never" class="mb-16">
+      <template #header>
+        <span>班级统计</span>
+      </template>
+      <el-row :gutter="20">
+        <el-col :span="6">
+          <div class="stat-card">
+            <div class="stat-label">参考人数</div>
+            <div class="stat-value">{{ classStats.studentCount }}</div>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="stat-card">
+            <div class="stat-label">班级平均分</div>
+            <div class="stat-value">{{ classStats.avgScore }}</div>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="stat-card">
+            <div class="stat-label">最高分</div>
+            <div class="stat-value stat-good">{{ classStats.maxScore }}</div>
+          </div>
+        </el-col>
+        <el-col :span="6">
+          <div class="stat-card">
+            <div class="stat-label">最低分</div>
+            <div class="stat-value stat-bad">{{ classStats.minScore }}</div>
+          </div>
+        </el-col>
+      </el-row>
+    </el-card>
+
+    <!-- 成绩趋势图表 -->
+    <el-card shadow="never" class="mb-16">
+      <template #header>
+        <span>成绩趋势</span>
+      </template>
+      <div ref="trendChartRef" style="width: 100%; height: 350px;"></div>
+    </el-card>
+
+    <!-- 成绩分布图表 -->
+    <el-card shadow="never" class="mb-16">
+      <template #header>
+        <span>成绩分布</span>
+      </template>
+      <div ref="chartRef" style="width: 100%; height: 300px;"></div>
+    </el-card>
+
+    <!-- 学生成绩分析表 -->
+    <el-card shadow="never" class="mb-16">
+      <template #header>
+        <span>学生成绩分析</span>
       </template>
       <el-table :data="analysisSummary" style="width: 100%" v-loading="loading">
         <el-table-column prop="student_id" label="学号" width="90" />
@@ -21,7 +108,7 @@
         </el-table-column>
         <el-table-column prop="best" label="最高分" width="100" />
         <el-table-column prop="last_score" label="最近成绩" width="100" />
-        <el-table-column prop="trend" label="趋势" width="100">
+        <el-table-column prop="trend" label="趋势" width="120">
           <template #default="scope">
             <el-tag :type="scope.row.trend === 'up' ? 'success' : scope.row.trend === 'down' ? 'danger' : 'info'">
               {{ scope.row.trendText }}
@@ -29,11 +116,6 @@
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
-
-    <!-- 成绩分布图表 -->
-    <el-card shadow="never" class="mb-16">
-      <div ref="chartRef" style="width: 100%; height: 300px;"></div>
     </el-card>
 
     <el-card shadow="never">
@@ -85,7 +167,7 @@
         v-model:current-page="currentPage"
         v-model:page-size="pageSize"
         :page-sizes="[20, 50, 100]"
-        :total="scores.length"
+        :total="filteredScores.length"
         layout="total, sizes, prev, pager, next"
         style="margin-top: 16px; justify-content: flex-end;"
       />
@@ -182,16 +264,84 @@ const students = ref([])
 const analysisSummary = ref([])
 const importFile = ref(null)
 
+// 筛选表单
+const filterForm = ref({
+  exam_name: '',
+  subject: '',
+  student_ids: []
+})
+
+// 成绩趋势图表
+const trendChartRef = ref(null)
+let trendChartInstance = null
+
+// 获取所有考试名称（去重）
+const examNames = computed(() => {
+  const names = new Set(scores.value.map(s => s.exam_name).filter(Boolean))
+  return Array.from(names).sort()
+})
+
+// 获取所有科目（去重）
+const subjects = computed(() => {
+  const subjs = new Set(scores.value.map(s => s.subject).filter(Boolean))
+  return Array.from(subjs).sort()
+})
+
+// 筛选后的成绩数据
+const filteredScores = computed(() => {
+  return scores.value.filter(s => {
+    if (filterForm.value.exam_name && s.exam_name !== filterForm.value.exam_name) return false
+    if (filterForm.value.subject && s.subject !== filterForm.value.subject) return false
+    if (filterForm.value.student_ids.length > 0 && !filterForm.value.student_ids.includes(s.student_id)) return false
+    return true
+  })
+})
+
+// 班级统计
+const classStats = computed(() => {
+  const data = filteredScores.value
+  if (data.length === 0) {
+    return { studentCount: 0, avgScore: '—', maxScore: '—', minScore: '—' }
+  }
+  const studentIds = new Set(data.map(s => s.student_id))
+  const scoresArr = data.map(s => Number(s.score))
+  const avg = (scoresArr.reduce((sum, x) => sum + x, 0) / scoresArr.length).toFixed(1)
+  const max = Math.max(...scoresArr).toFixed(1)
+  const min = Math.min(...scoresArr).toFixed(1)
+  return {
+    studentCount: studentIds.size,
+    avgScore: avg,
+    maxScore: max,
+    minScore: min
+  }
+})
+
+// 应用筛选
+const applyFilter = () => {
+  buildAnalysis(filteredScores.value)
+  currentPage.value = 1
+  nextTick(() => {
+    renderChart()
+    renderTrendChart()
+  })
+}
+
+// 重置筛选
+const resetFilter = () => {
+  filterForm.value = { exam_name: '', subject: '', student_ids: [] }
+  applyFilter()
+}
+
 // 批量操作：选中行
 const selectedRows = ref([])
 const handleSelectionChange = (val) => { selectedRows.value = val }
 
-// 分页：当前页与每页条数（基于全量成绩切片）
+// 分页：当前页与每页条数（基于筛选后的成绩切片）
 const currentPage = ref(1)
 const pageSize = ref(20)
 const pagedScores = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
-  return scores.value.slice(start, start + pageSize.value)
+  return filteredScores.value.slice(start, start + pageSize.value)
 })
 
 // 成绩分布图表
@@ -206,7 +356,7 @@ const renderChart = () => {
   }
   // 计算各分数段人数
   const ranges = { '90-100': 0, '80-89': 0, '70-79': 0, '60-69': 0, '0-59': 0 }
-  scores.value.forEach(s => {
+  filteredScores.value.forEach(s => {
     const score = Number(s.score)
     if (score >= 90) ranges['90-100']++
     else if (score >= 80) ranges['80-89']++
@@ -215,7 +365,6 @@ const renderChart = () => {
     else ranges['0-59']++
   })
   chartInstance.setOption({
-    title: { text: '成绩分布', left: 'center' },
     tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: Object.keys(ranges) },
     yAxis: { type: 'value', minInterval: 1 },
@@ -233,9 +382,47 @@ const renderChart = () => {
   })
 }
 
+// 渲染成绩趋势图
+const renderTrendChart = () => {
+  if (!trendChartRef.value) return
+  if (!trendChartInstance) {
+    trendChartInstance = echarts.init(trendChartRef.value)
+  }
+  
+  // 按考试名称分组，计算每次考试的平均分
+  const examGroups = {}
+  filteredScores.value.forEach(s => {
+    if (!examGroups[s.exam_name]) {
+      examGroups[s.exam_name] = []
+    }
+    examGroups[s.exam_name].push(Number(s.score))
+  })
+  
+  const examNamesList = Object.keys(examGroups).sort()
+  const avgScores = examNamesList.map(name => {
+    const scores = examGroups[name]
+    return (scores.reduce((sum, x) => sum + x, 0) / scores.length).toFixed(1)
+  })
+  
+  trendChartInstance.setOption({
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: examNamesList },
+    yAxis: { type: 'value', min: 0, max: 100 },
+    series: [{
+      name: '班级平均分',
+      type: 'line',
+      data: avgScores,
+      smooth: true,
+      itemStyle: { color: '#409eff' },
+      label: { show: true, position: 'top' }
+    }]
+  })
+}
+
 // 窗口 resize 时调整图表大小
 const handleResize = () => {
   chartInstance && chartInstance.resize()
+  trendChartInstance && trendChartInstance.resize()
 }
 
 // 单条成绩表单
@@ -340,7 +527,10 @@ const loadData = async () => {
     buildAnalysis(scoreRows)
     // 数据加载完成后重置分页并渲染图表
     currentPage.value = 1
-    nextTick(renderChart)
+    nextTick(() => {
+      renderChart()
+      renderTrendChart()
+    })
   } catch (e) {
     // 拦截器已提示
   } finally {
@@ -503,6 +693,10 @@ onBeforeUnmount(() => {
     chartInstance.dispose()
     chartInstance = null
   }
+  if (trendChartInstance) {
+    trendChartInstance.dispose()
+    trendChartInstance = null
+  }
 })
 </script>
 
@@ -525,6 +719,33 @@ onBeforeUnmount(() => {
 .action-buttons {
   display: flex;
   gap: 10px;
+}
+.filter-form {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.stat-card {
+  text-align: center;
+  padding: 20px;
+  background: #f5f7fa;
+  border-radius: 4px;
+}
+.stat-label {
+  font-size: 14px;
+  color: #909399;
+  margin-bottom: 8px;
+}
+.stat-value {
+  font-size: 28px;
+  font-weight: bold;
+  color: #303133;
+}
+.stat-good {
+  color: #67c23a;
+}
+.stat-bad {
+  color: #f56c6c;
 }
 .score-header {
   font-weight: bold;
