@@ -1,0 +1,17 @@
+node_modules
+backend/node_modules
+backend/database.sqlite
+backend/uploads/*
+!backend/uploads/.gitkeep
+frontend/node_modules
+frontend/src
+logs/*
+run/*
+release/*
+.stage
+.git
+.gitignore
+*.md
+docs
+deploy/nginx
+.vscode

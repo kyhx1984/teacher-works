@@ -1,0 +1,5 @@
+node_modules/
+uploads/
+database.sqlite
+*.log
+.DS_Store

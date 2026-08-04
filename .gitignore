@@ -1,0 +1,10 @@
+# 运行时产物
+run/
+logs/
+frontend/dist/
+frontend/node_modules/
+backend/node_modules/
+backend/database.sqlite
+backend/uploads/
+.DS_Store
+*.log

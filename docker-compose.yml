@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  teacher-ops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: teacher-ops
+    restart: always          # 异常后自动重启
+    ports:
+      - "3000:3000"
+    volumes:
+      # 代码挂载 - 解压新代码后重启即可更新
+      - ./backend:/app/backend
+      - ./frontend/dist:/app/frontend/dist
+      # 依赖持久化 - 命名卷保存 node_modules，避免每次重启都安装
+      - deps:/deps
+      # 数据持久化 - 数据库和上传文件
+      - ./data:/app/data
+      # 日志持久化
+      - ./logs:/app/logs
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_PATH=/app/data/database.sqlite
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  deps:
+    name: teacher-ops-deps
