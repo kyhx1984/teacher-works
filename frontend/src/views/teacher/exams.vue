@@ -3,17 +3,25 @@
     <el-card shadow="never">
       <template #header>
         <div class="header-actions">
-          <el-input
-            v-model="searchQuery"
-            placeholder="搜索试卷标题"
-            style="width: 250px"
-            clearable
-            @input="filterExams"
-          >
-            <template #prefix>
-              <el-icon><Search /></el-icon>
-            </template>
-          </el-input>
+          <div class="filters">
+            <el-select v-model="filterType" placeholder="试卷类型" clearable style="width: 140px; margin-right: 10px" @change="loadExams">
+              <el-option label="单元检测" value="单元检测" />
+              <el-option label="专项练习" value="专项练习" />
+              <el-option label="期中考试" value="期中考试" />
+              <el-option label="期末考试" value="期末考试" />
+            </el-select>
+            <el-input
+              v-model="searchQuery"
+              placeholder="模糊搜索试卷标题"
+              style="width: 250px"
+              clearable
+              @input="onSearchInput"
+            >
+              <template #prefix>
+                <el-icon><Search /></el-icon>
+              </template>
+            </el-input>
+          </div>
           <el-button type="primary" @click="openCreate">
             <el-icon><Plus /></el-icon>新增试卷
           </el-button>
@@ -92,6 +100,14 @@
             :rows="8"
             v-model="form.content"
             placeholder="每行一题，或直接粘贴题目文本"
+          />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            type="textarea"
+            :rows="2"
+            v-model="form.remark"
+            placeholder="可选，如：考试范围、注意事项等"
           />
         </el-form-item>
       </el-form>
@@ -225,6 +241,7 @@ import {
 const loading = ref(false)
 const saving = ref(false)
 const searchQuery = ref('')
+const filterType = ref('')
 const dialogVisible = ref(false)
 const previewVisible = ref(false)
 const allExams = ref([])
@@ -292,15 +309,30 @@ const preview = (row) => {
 }
 
 const openCreate = () => {
-  form.value = { id: null, title: '', type: '', content: '', resource_id: null }
+  form.value = { id: null, title: '', type: '', content: '', resource_id: null, remark: '' }
   dialogVisible.value = true
+}
+
+// 搜索防抖
+let searchTimer = null
+const onSearchInput = () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    loadExams()
+  }, 300)
 }
 
 const loadExams = async () => {
   loading.value = true
   try {
-    allExams.value = await getExams()
-    filterExams()
+    const params = {}
+    if (filterType.value) params.type = filterType.value
+    if (searchQuery.value) params.keyword = searchQuery.value
+    
+    const queryString = new URLSearchParams(params).toString()
+    const url = queryString ? `/exams?${queryString}` : '/exams'
+    allExams.value = await getExams(url)
+    filtered.value = allExams.value
   } catch (e) {
     // 拦截器已提示
   } finally {
@@ -327,7 +359,8 @@ const handleSave = async () => {
       title: form.value.title, 
       type: form.value.type || '单元检测', 
       content: form.value.content,
-      resource_id: form.value.resource_id
+      resource_id: form.value.resource_id,
+      remark: form.value.remark
     }
     if (form.value.id) {
       await updateExam(form.value.id, payload)

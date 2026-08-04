@@ -151,6 +151,21 @@ async function initDb() {
     await db.run('ALTER TABLE communications ADD COLUMN attachments TEXT');
   } catch (e) { /* attachments 列已存在，忽略 */ }
 
+  // 为已存在的 recitations 表追加 remark 列（备注）
+  try {
+    await db.run('ALTER TABLE recitations ADD COLUMN remark TEXT');
+  } catch (e) { /* remark 列已存在，忽略 */ }
+
+  // 为已存在的 exams 表追加 remark 列（备注）
+  try {
+    await db.run('ALTER TABLE exams ADD COLUMN remark TEXT');
+  } catch (e) { /* remark 列已存在，忽略 */ }
+
+  // 为已存在的 leaves 表追加 remark 列（备注）
+  try {
+    await db.run('ALTER TABLE leaves ADD COLUMN remark TEXT');
+  } catch (e) { /* remark 列已存在，忽略 */ }
+
   // 插入默认教师名称（仅首次初始化时）
   const existing = await db.get("SELECT key FROM settings WHERE key = 'teacher_name'");
   if (!existing) {

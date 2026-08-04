@@ -492,37 +492,17 @@ router.get('/leaves', async (req, res) => {
   }
 });
 
-// POST /leaves - 登记/销假（multipart/form-data，支持上传请假条图片）
+// POST /leaves - 登记请假（multipart/form-data，支持上传请假条图片和备注）
 router.post('/leaves', leaveImageUpload.single('image'), async (req, res) => {
   try {
-    const { student_id, start_date, end_date, reason, status, id } = req.body;
+    const { student_id, start_date, end_date, reason, remark } = req.body;
     const db = await getDb();
-
-    if (id) {
-      // Update existing leave (e.g., 销假)
-      // 若同时上传了新图片，则一并更新 image_path
-      if (req.file) {
-        await db.run(
-          'UPDATE leaves SET status = ?, image_path = ? WHERE id = ?',
-          [status || '已销假', req.file.filename, id]
-        );
-      } else {
-        await db.run(
-          'UPDATE leaves SET status = ? WHERE id = ?',
-          [status || '已销假', id]
-        );
-      }
-      sendResponse(res, { id });
-    } else {
-      // Create new leave
-      // 如果有图片文件，将文件名存入 image_path
-      const imagePath = req.file ? req.file.filename : null;
-      const result = await db.run(
-        'INSERT INTO leaves (student_id, start_date, end_date, reason, status, image_path) VALUES (?, ?, ?, ?, ?, ?)',
-        [student_id, start_date, end_date, reason, status || '登记', imagePath]
-      );
-      sendResponse(res, { id: result.lastID, image_path: imagePath });
-    }
+    const imagePath = req.file ? req.file.filename : null;
+    const result = await db.run(
+      'INSERT INTO leaves (student_id, start_date, end_date, reason, status, image_path, remark) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [student_id, start_date, end_date, reason, '登记', imagePath, remark || null]
+    );
+    sendResponse(res, { id: result.lastID, image_path: imagePath });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -541,6 +521,52 @@ router.put('/leaves/batch-status', async (req, res) => {
     const placeholders = ids.map(() => '?').join(',');
     await db.run(`UPDATE leaves SET status = ? WHERE id IN (${placeholders})`, [status, ...ids]);
     sendResponse(res, { ids, status });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /leaves/:id - 编辑请假记录（支持更新备注和上传补充材料）
+router.put('/leaves/:id', leaveImageUpload.single('image'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { start_date, end_date, reason, remark } = req.body;
+    const db = await getDb();
+    
+    const existing = await db.get('SELECT id, image_path FROM leaves WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '请假记录不存在', 404);
+    
+    // 构建更新SQL
+    const updates = [];
+    const params = [];
+    
+    if (start_date !== undefined) { updates.push('start_date = ?'); params.push(start_date); }
+    if (end_date !== undefined) { updates.push('end_date = ?'); params.push(end_date); }
+    if (reason !== undefined) { updates.push('reason = ?'); params.push(reason); }
+    if (remark !== undefined) { updates.push('remark = ?'); params.push(remark); }
+    
+    // 如果上传了新图片，更新image_path
+    if (req.file) {
+      updates.push('image_path = ?');
+      params.push(req.file.filename);
+      
+      // 删除旧图片文件
+      if (existing.image_path) {
+        const oldImagePath = path.join(__dirname, '..', 'uploads', existing.image_path);
+        if (fs.existsSync(oldImagePath)) {
+          fs.unlinkSync(oldImagePath);
+        }
+      }
+    }
+    
+    if (updates.length === 0) {
+      return sendResponse(res, null, '没有需要更新的字段', 400);
+    }
+    
+    params.push(id);
+    await db.run(`UPDATE leaves SET ${updates.join(', ')} WHERE id = ?`, params);
+    
+    sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }

@@ -9,13 +9,13 @@ export const changePassword = (data) => request.put('/auth/password', data)
 export const getStats = () => request.get('/stats')
 
 // ================= 资源管理 =================
-export const getResources = () => request.get('/resources')
+export const getResources = (url = '/resources') => request.get(url)
 export const uploadResource = (formData) =>
   request.post('/resources', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const deleteResource = (id) => request.delete(`/resources/${id}`)
 
 // ================= 试卷管理 =================
-export const getExams = () => request.get('/exams')
+export const getExams = (url = '/exams') => request.get(url)
 export const createExam = (data) => request.post('/exams', data)
 export const updateExam = (id, data) => request.put(`/exams/${id}`, data)
 export const deleteExam = (id) => request.delete(`/exams/${id}`)
@@ -65,6 +65,7 @@ export const batchDeletePoints = (ids) => request.delete('/points/batch', { data
 // ================= 请假管理 =================
 export const getLeaves = () => request.get('/leaves')
 export const createLeave = (data) => request.post('/leaves', data)
+export const updateLeave = (id, data) => request.put(`/leaves/${id}`, data)
 export const changeLeaveStatus = (id, status) => request.post('/leaves', { id, status })
 export const deleteLeave = (id) => request.delete(`/leaves/${id}`)
 export const batchUpdateLeaveStatus = (ids, status) => request.put('/leaves/batch-status', { ids, status })

@@ -31,11 +31,17 @@ const sendResponse = (res, data = {}, message = 'success', code = 200) => {
 
 // ================= RESOURCES =================
 
-// GET /resources - 获取资源列表
+// GET /resources - 获取资源列表（支持 type 筛选和 keyword 模糊搜索）
 router.get('/resources', async (req, res) => {
   try {
     const db = await getDb();
-    const resources = await db.all('SELECT * FROM resources ORDER BY upload_time DESC');
+    const { type, keyword } = req.query;
+    let sql = 'SELECT * FROM resources WHERE 1=1';
+    const params = [];
+    if (type) { sql += ' AND type = ?'; params.push(type); }
+    if (keyword) { sql += ' AND title LIKE ?'; params.push(`%${keyword}%`); }
+    sql += ' ORDER BY upload_time DESC';
+    const resources = await db.all(sql, params);
     sendResponse(res, resources);
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -83,16 +89,22 @@ router.delete('/resources/:id', async (req, res) => {
 
 // ================= EXAMS =================
 
-// GET /exams - 试卷列表（LEFT JOIN resources，返回关联资源信息）
+// GET /exams - 试卷列表（支持 type 筛选和 keyword 模糊搜索，LEFT JOIN resources）
 router.get('/exams', async (req, res) => {
   try {
     const db = await getDb();
-    const exams = await db.all(`
+    const { type, keyword } = req.query;
+    let sql = `
       SELECT e.*, r.title as resource_title, r.file_path as resource_path
       FROM exams e
       LEFT JOIN resources r ON e.resource_id = r.id
-      ORDER BY e.created_at DESC
-    `);
+      WHERE 1=1
+    `;
+    const params = [];
+    if (type) { sql += ' AND e.type = ?'; params.push(type); }
+    if (keyword) { sql += ' AND e.title LIKE ?'; params.push(`%${keyword}%`); }
+    sql += ' ORDER BY e.created_at DESC';
+    const exams = await db.all(sql, params);
     // Parse JSON content back for the frontend
     exams.forEach(exam => {
       if (exam.content) {
@@ -105,15 +117,15 @@ router.get('/exams', async (req, res) => {
   }
 });
 
-// POST /exams - 新增试卷（支持关联资源）
+// POST /exams - 新增试卷（支持关联资源和备注）
 router.post('/exams', async (req, res) => {
   try {
-    const { title, type, content, resource_id } = req.body;
+    const { title, type, content, resource_id, remark } = req.body;
     const db = await getDb();
     const contentStr = typeof content === 'object' ? JSON.stringify(content) : content;
     const result = await db.run(
-      'INSERT INTO exams (title, type, content, resource_id) VALUES (?, ?, ?, ?)',
-      [title, type, contentStr, resource_id || null]
+      'INSERT INTO exams (title, type, content, resource_id, remark) VALUES (?, ?, ?, ?, ?)',
+      [title, type, contentStr, resource_id || null, remark || null]
     );
     sendResponse(res, { id: result.lastID });
   } catch (err) {
@@ -125,14 +137,14 @@ router.post('/exams', async (req, res) => {
 router.put('/exams/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, type, content, resource_id } = req.body;
+    const { title, type, content, resource_id, remark } = req.body;
     const db = await getDb();
     const existing = await db.get('SELECT id FROM exams WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '试卷不存在', 404);
     const contentStr = typeof content === 'object' ? JSON.stringify(content) : content;
     await db.run(
-      'UPDATE exams SET title=?, type=?, content=?, resource_id=? WHERE id=?',
-      [title, type, contentStr, resource_id || null, id]
+      'UPDATE exams SET title=?, type=?, content=?, resource_id=?, remark=? WHERE id=?',
+      [title, type, contentStr, resource_id || null, remark || null, id]
     );
     sendResponse(res, { id });
   } catch (err) {
@@ -429,43 +441,61 @@ router.get('/recitations', async (req, res) => {
   }
 });
 
-// POST /recitations - 登记背书
-// 优先使用 student_id（若有则同时查出 student_name 存入），否则使用 student_name
+// POST /recitations - 登记背书（支持批量创建和备注）
 router.post('/recitations', async (req, res) => {
   try {
-    const { student_id, student_name, subject, article, status } = req.body;
+    const { student_ids, student_id, student_name, subject, article, status, remark } = req.body;
     const db = await getDb();
 
-    let finalStudentId = student_id || null;
-    let finalStudentName = student_name || '';
-
-    // 若提供了 student_id，则查出对应的 student_name 一并存入，便于显示
-    if (finalStudentId) {
-      const student = await db.get('SELECT name FROM students WHERE id = ?', [finalStudentId]);
-      if (student) {
-        finalStudentName = student.name;
+    // 支持批量创建：如果传入 student_ids 数组，则为每个学生创建一条记录
+    if (student_ids && Array.isArray(student_ids) && student_ids.length > 0) {
+      let inserted = 0;
+      for (const sid of student_ids) {
+        const student = await db.get('SELECT name FROM students WHERE id = ?', [sid]);
+        const finalStudentName = student ? student.name : '';
+        await db.run(
+          'INSERT INTO recitations (student_id, student_name, subject, article, status, remark) VALUES (?, ?, ?, ?, ?, ?)',
+          [sid, finalStudentName, subject, article, status || 0, remark || null]
+        );
+        inserted++;
       }
-    }
+      sendResponse(res, { inserted });
+    } else {
+      // 单条创建
+      let finalStudentId = student_id || null;
+      let finalStudentName = student_name || '';
 
-    const result = await db.run(
-      'INSERT INTO recitations (student_id, student_name, subject, article, status) VALUES (?, ?, ?, ?, ?)',
-      [finalStudentId, finalStudentName, subject, article, status || 0]
-    );
-    sendResponse(res, { id: result.lastID });
+      if (finalStudentId) {
+        const student = await db.get('SELECT name FROM students WHERE id = ?', [finalStudentId]);
+        if (student) {
+          finalStudentName = student.name;
+        }
+      }
+
+      const result = await db.run(
+        'INSERT INTO recitations (student_id, student_name, subject, article, status, remark) VALUES (?, ?, ?, ?, ?, ?)',
+        [finalStudentId, finalStudentName, subject, article, status || 0, remark || null]
+      );
+      sendResponse(res, { id: result.lastID });
+    }
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
 });
 
-// PUT /recitations/:id - 更新背书状态 (标记已背/撤销)
+// PUT /recitations/:id - 更新背书状态/备注
 router.put('/recitations/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, remark } = req.body;
     const db = await getDb();
     const existing = await db.get('SELECT id FROM recitations WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '记录不存在', 404);
-    await db.run('UPDATE recitations SET status = ? WHERE id = ?', [status === 1 ? 1 : 0, id]);
+    if (status !== undefined) {
+      await db.run('UPDATE recitations SET status = ?, remark = ? WHERE id = ?', [status === 1 ? 1 : 0, remark || null, id]);
+    } else {
+      await db.run('UPDATE recitations SET remark = ? WHERE id = ?', [remark || null, id]);
+    }
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);

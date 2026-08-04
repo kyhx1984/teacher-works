@@ -52,6 +52,7 @@
             <span v-else class="no-attach">—</span>
           </template>
         </el-table-column>
+        <el-table-column prop="remark" label="备注" width="150" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="100">
           <template #default="scope">
             <el-tag :type="scope.row.status === '已销假' ? 'success' : 'warning'">
@@ -61,6 +62,7 @@
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="scope">
+            <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
             <el-button
               v-if="scope.row.status === '登记'"
               link
@@ -135,6 +137,14 @@
             </template>
           </el-upload>
         </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="form.remark"
+            type="textarea"
+            :rows="2"
+            placeholder="可选，如：补交材料说明等"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -170,7 +180,7 @@ const formRef = ref()
 // 用户选择的图片文件
 const imageFile = ref(null)
 
-const form = ref({ student_id: null, start_date: '', end_date: '', reason: '' })
+const form = ref({ student_id: null, start_date: '', end_date: '', reason: '', remark: '' })
 
 // 请假表单校验规则
 const leaveRules = {
@@ -204,7 +214,24 @@ const resetPage = () => { currentPage.value = 1 }
 const previewList = (imagePath) => [`/uploads/${imagePath}`]
 
 const openCreate = () => {
-  form.value = { student_id: null, start_date: '', end_date: '', reason: '' }
+  form.value = { student_id: null, start_date: '', end_date: '', reason: '', remark: '' }
+  imageFile.value = null
+  if (uploadRef.value) uploadRef.value.clearFiles()
+  dialogVisible.value = true
+  nextTick(() => {
+    formRef.value?.clearValidate()
+  })
+}
+
+const openEdit = (row) => {
+  form.value = { 
+    id: row.id,
+    student_id: row.student_id, 
+    start_date: row.start_date, 
+    end_date: row.end_date, 
+    reason: row.reason,
+    remark: row.remark || ''
+  }
   imageFile.value = null
   if (uploadRef.value) uploadRef.value.clearFiles()
   dialogVisible.value = true
@@ -259,11 +286,22 @@ const handleSave = async () => {
     fd.append('start_date', form.value.start_date)
     fd.append('end_date', form.value.end_date)
     fd.append('reason', form.value.reason)
+    if (form.value.remark) {
+      fd.append('remark', form.value.remark)
+    }
     if (imageFile.value) {
       fd.append('image', imageFile.value)
     }
-    await createLeave(fd)
-    ElMessage.success('登记成功')
+    
+    if (form.value.id) {
+      // 编辑模式
+      await updateLeave(form.value.id, fd)
+      ElMessage.success('更新成功')
+    } else {
+      // 创建模式
+      await createLeave(fd)
+      ElMessage.success('登记成功')
+    }
     dialogVisible.value = false
     loadData()
   } catch (e) {

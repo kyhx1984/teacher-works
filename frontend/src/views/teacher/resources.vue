@@ -3,17 +3,29 @@
     <el-card shadow="never">
       <template #header>
         <div class="header-actions">
-          <el-input
-            v-model="searchQuery"
-            placeholder="搜索资源名称"
-            style="width: 250px"
-            clearable
-            @input="filterResources"
-          >
-            <template #prefix>
-              <el-icon><Search /></el-icon>
-            </template>
-          </el-input>
+          <div class="filters">
+            <el-select v-model="filterType" placeholder="资源类型" clearable style="width: 140px; margin-right: 10px" @change="loadResources">
+              <el-option label="PDF" value="PDF" />
+              <el-option label="Word" value="Word" />
+              <el-option label="PPT" value="PPT" />
+              <el-option label="Excel" value="Excel" />
+              <el-option label="图片" value="图片" />
+              <el-option label="视频" value="视频" />
+              <el-option label="音频" value="音频" />
+              <el-option label="其他" value="其他" />
+            </el-select>
+            <el-input
+              v-model="searchQuery"
+              placeholder="模糊搜索资源名称"
+              style="width: 250px"
+              clearable
+              @input="onSearchInput"
+            >
+              <template #prefix>
+                <el-icon><Search /></el-icon>
+              </template>
+            </el-input>
+          </div>
           <el-button type="primary" @click="openUpload">
             <el-icon><Upload /></el-icon>上传资源
           </el-button>
@@ -92,6 +104,7 @@ import { getResources, uploadResource, deleteResource } from '../../api'
 const loading = ref(false)
 const uploading = ref(false)
 const searchQuery = ref('')
+const filterType = ref('')
 const dialogVisible = ref(false)
 const uploadRef = ref()
 const rawList = ref([])
@@ -101,11 +114,30 @@ const form = ref({ title: '', type: '', file: null })
 
 const allResources = ref([])
 
-const filterResources = () => {
-  if (!searchQuery.value) {
+// 搜索防抖
+let searchTimer = null
+const onSearchInput = () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    loadResources()
+  }, 300)
+}
+
+const loadResources = async () => {
+  loading.value = true
+  try {
+    const params = {}
+    if (filterType.value) params.type = filterType.value
+    if (searchQuery.value) params.keyword = searchQuery.value
+    
+    const queryString = new URLSearchParams(params).toString()
+    const url = queryString ? `/resources?${queryString}` : '/resources'
+    allResources.value = await getResources(url)
     filtered.value = allResources.value
-  } else {
-    filtered.value = allResources.value.filter((r) => r.title.includes(searchQuery.value))
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    loading.value = false
   }
 }
 
@@ -145,18 +177,6 @@ const openUpload = () => {
   form.value = { title: '', type: '', file: null }
   if (uploadRef.value) uploadRef.value.clearFiles()
   dialogVisible.value = true
-}
-
-const loadResources = async () => {
-  loading.value = true
-  try {
-    allResources.value = await getResources()
-    filterResources()
-  } catch (e) {
-    // 拦截器已提示
-  } finally {
-    loading.value = false
-  }
 }
 
 const handleUpload = async () => {
@@ -199,5 +219,10 @@ onMounted(loadResources)
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 </style>

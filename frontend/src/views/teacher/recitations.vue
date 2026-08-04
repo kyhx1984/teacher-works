@@ -27,6 +27,7 @@
         <el-table-column prop="student_name" label="学生姓名" width="120" />
         <el-table-column prop="subject" label="科目" width="100" />
         <el-table-column prop="article" label="篇目名称" show-overflow-tooltip />
+        <el-table-column prop="remark" label="备注" width="150" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="100">
           <template #default="scope">
             <el-tag :type="scope.row.status === 1 ? 'success' : 'danger'">
@@ -90,6 +91,14 @@
         <el-form-item label="篇目名称" prop="article">
           <el-input v-model="form.article" placeholder="例如：出师表" />
         </el-form-item>
+        <el-form-item label="备注">
+          <el-input 
+            v-model="form.remark" 
+            type="textarea" 
+            :rows="2"
+            placeholder="可选，如：背诵要求、特殊情况说明等" 
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -117,7 +126,7 @@ const students = ref([])
 const formRef = ref()
 
 // 表单：使用 student_ids 数组支持批量选择
-const form = ref({ student_ids: [], subject: '语文', article: '' })
+const form = ref({ student_ids: [], subject: '语文', article: '', remark: '' })
 
 // 背书表单校验规则
 const recitationRules = {
@@ -139,7 +148,7 @@ const filterList = () => {
 }
 
 const openCreate = () => {
-  form.value = { student_ids: [], subject: '语文', article: '' }
+  form.value = { student_ids: [], subject: '语文', article: '', remark: '' }
   dialogVisible.value = true
   nextTick(() => {
     formRef.value?.clearValidate()
