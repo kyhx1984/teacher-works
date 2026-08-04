@@ -1,5 +1,10 @@
 import request from './request'
 
+// ================= 认证 =================
+export const login = (data) => request.post('/auth/login', data)
+export const checkAuth = () => request.get('/auth/check')
+export const changePassword = (data) => request.put('/auth/password', data)
+
 // ================= 统计数据 =================
 export const getStats = () => request.get('/stats')
 
@@ -26,6 +31,7 @@ export const getStudent = (id) => request.get(`/students/${id}`)
 export const createStudent = (data) => request.post('/students', data)
 export const updateStudent = (id, data) => request.put(`/students/${id}`, data)
 export const deleteStudent = (id) => request.delete(`/students/${id}`)
+export const batchDeleteStudents = (ids) => request.delete('/students/batch', { data: { ids } })
 export const importStudents = (formData) =>
   request.post('/students/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
@@ -33,17 +39,26 @@ export const importStudents = (formData) =>
 export const getScores = () => request.get('/scores')
 export const importScores = (formData) =>
   request.post('/scores/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+// 成绩 - 单条操作
+export const createScore = (data) => request.post('/scores', data)
+export const updateScore = (id, data) => request.put(`/scores/${id}`, data)
+export const deleteScore = (id) => request.delete(`/scores/${id}`)
+// 成绩 - 批量操作
+export const batchDeleteScores = (ids) => request.delete('/scores/batch', { data: { ids } })
 
 // ================= 积分管理 =================
 export const getPoints = () => request.get('/points')
 export const createPoint = (data) => request.post('/points', data)
 export const deletePoint = (id) => request.delete(`/points/${id}`)
+export const batchDeletePoints = (ids) => request.delete('/points/batch', { data: { ids } })
 
 // ================= 请假管理 =================
 export const getLeaves = () => request.get('/leaves')
 export const createLeave = (data) => request.post('/leaves', data)
 export const changeLeaveStatus = (id, status) => request.post('/leaves', { id, status })
 export const deleteLeave = (id) => request.delete(`/leaves/${id}`)
+export const batchUpdateLeaveStatus = (ids, status) => request.put('/leaves/batch-status', { ids, status })
+export const batchDeleteLeaves = (ids) => request.delete('/leaves/batch', { data: { ids } })
 
 // ================= 期末评价 =================
 export const getEvaluations = () => request.get('/evaluations')
@@ -54,10 +69,21 @@ export const updateEvaluation = (id, data) => request.put(`/evaluations/${id}`, 
 export const getCommunications = () => request.get('/communications')
 export const createCommunication = (data) => request.post('/communications', data)
 export const deleteCommunication = (id) => request.delete(`/communications/${id}`)
+export const batchDeleteCommunications = (ids) => request.delete('/communications/batch', { data: { ids } })
 
 // ================= 座位表 =================
 export const getSeats = () => request.get('/seats')
+export const saveSeats = (data) => request.put('/seats', data)
 
 // ================= 系统设置 =================
 export const getSettings = () => request.get('/settings')
 export const updateSetting = (key, value) => request.put(`/settings/${key}`, { value })
+export const upgradeGrade = () => request.post('/settings/upgrade-grade')
+
+// ================= 导出 =================
+// 成绩导出
+export const exportScores = () => request.get('/scores/export', { responseType: 'blob' })
+// 学生花名册导出
+export const exportStudents = () => request.get('/students/export', { responseType: 'blob' })
+// 期末评价导出
+export const exportEvaluations = () => request.get('/evaluations/export', { responseType: 'blob' })

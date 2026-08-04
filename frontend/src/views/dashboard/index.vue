@@ -90,6 +90,26 @@
       </el-col>
     </el-row>
 
+    <!-- 数据可视化图表 -->
+    <el-row :gutter="20" class="mt-20">
+      <el-col :span="12">
+        <el-card shadow="hover">
+          <template #header>
+            <div class="card-header-title">近期请假趋势</div>
+          </template>
+          <div ref="leaveChartRef" style="width: 100%; height: 300px;"></div>
+        </el-card>
+      </el-col>
+      <el-col :span="12">
+        <el-card shadow="hover">
+          <template #header>
+            <div class="card-header-title">学生成绩分布</div>
+          </template>
+          <div ref="scoreChartRef" style="width: 100%; height: 300px;"></div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <el-row :gutter="20" class="mt-20">
       <el-col :span="24">
         <el-card shadow="hover">
@@ -117,8 +137,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { getStats } from '../../api'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import * as echarts from 'echarts'
+import { getStats, getLeaves, getScores } from '../../api'
 
 const stats = ref({
   resources: 0,
@@ -132,6 +153,96 @@ const stats = ref({
 })
 const activities = ref([])
 
+// 图表相关
+const leaveChartRef = ref(null)
+const scoreChartRef = ref(null)
+let leaveChartInstance = null
+let scoreChartInstance = null
+
+// 格式化日期为 YYYY-MM-DD
+const formatDate = (date) => {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+// 渲染近期请假趋势折线图（最近7天）
+const renderLeaveChart = (leaves) => {
+  if (!leaveChartRef.value) return
+  if (!leaveChartInstance) {
+    leaveChartInstance = echarts.init(leaveChartRef.value)
+  }
+  // 生成最近7天的日期数组
+  const days = []
+  const today = new Date()
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today)
+    d.setDate(today.getDate() - i)
+    days.push(formatDate(d))
+  }
+  // 按开始日期统计每天的请假人数
+  const countMap = {}
+  days.forEach(d => { countMap[d] = 0 })
+  leaves.forEach(item => {
+    const start = item.start_date ? item.start_date.slice(0, 10) : ''
+    if (countMap[start] !== undefined) countMap[start]++
+  })
+  leaveChartInstance.setOption({
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: days },
+    yAxis: { type: 'value', minInterval: 1 },
+    series: [{
+      name: '请假人数',
+      type: 'line',
+      data: days.map(d => countMap[d]),
+      smooth: true,
+      itemStyle: { color: '#409eff' },
+      areaStyle: { color: 'rgba(64, 158, 255, 0.15)' },
+      label: { show: true, position: 'top' }
+    }]
+  })
+}
+
+// 渲染学生成绩分布饼图
+const renderScoreChart = (scores) => {
+  if (!scoreChartRef.value) return
+  if (!scoreChartInstance) {
+    scoreChartInstance = echarts.init(scoreChartRef.value)
+  }
+  // 计算各分数段人数
+  const ranges = { '优秀(90-100)': 0, '良好(80-89)': 0, '中等(70-79)': 0, '及格(60-69)': 0, '不及格(0-59)': 0 }
+  scores.forEach(s => {
+    const score = Number(s.score)
+    if (score >= 90) ranges['优秀(90-100)']++
+    else if (score >= 80) ranges['良好(80-89)']++
+    else if (score >= 70) ranges['中等(70-79)']++
+    else if (score >= 60) ranges['及格(60-69)']++
+    else ranges['不及格(0-59)']++
+  })
+  const colors = ['#67c23a', '#409eff', '#e6a23c', '#f56c6c', '#909399']
+  scoreChartInstance.setOption({
+    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    legend: { bottom: 0 },
+    color: colors,
+    series: [{
+      name: '成绩分布',
+      type: 'pie',
+      radius: ['40%', '70%'],
+      center: ['50%', '45%'],
+      avoidLabelOverlap: true,
+      label: { show: true, formatter: '{b}\n{d}%' },
+      data: Object.keys(ranges).map(k => ({ name: k, value: ranges[k] }))
+    }]
+  })
+}
+
+// 窗口 resize 时调整图表大小
+const handleResize = () => {
+  leaveChartInstance && leaveChartInstance.resize()
+  scoreChartInstance && scoreChartInstance.resize()
+}
+
 onMounted(async () => {
   try {
     const data = await getStats()
@@ -139,6 +250,30 @@ onMounted(async () => {
     activities.value = data.activities || []
   } catch (e) {
     // 错误已在拦截器中提示
+  }
+  // 并行加载请假与成绩数据用于图表展示
+  try {
+    const [leaves, scores] = await Promise.all([getLeaves(), getScores()])
+    nextTick(() => {
+      renderLeaveChart(leaves)
+      renderScoreChart(scores)
+    })
+  } catch (e) {
+    // 错误已在拦截器中提示
+  }
+  window.addEventListener('resize', handleResize)
+})
+
+// 组件卸载时销毁图表实例，避免内存泄漏
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  if (leaveChartInstance) {
+    leaveChartInstance.dispose()
+    leaveChartInstance = null
+  }
+  if (scoreChartInstance) {
+    scoreChartInstance.dispose()
+    scoreChartInstance = null
   }
 })
 </script>

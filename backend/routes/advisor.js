@@ -1,14 +1,34 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const xlsx = require('xlsx');
 const { getDb } = require('../db');
 
+// 用于 Excel 导入的内存存储上传
 const upload = multer({ storage: multer.memoryStorage() });
+
+// 用于请假条图片上传（保存到 uploads/ 目录）
+const leaveImageStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadPath = path.join(__dirname, '..', 'uploads');
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+    cb(null, uploadPath);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + '-' + file.originalname);
+  }
+});
+const leaveImageUpload = multer({ storage: leaveImageStorage });
 
 // Standard response formatter
 const sendResponse = (res, data = {}, message = 'success', code = 200) => {
-  res.status(code === 200 ? 200 : 500).json({ code, message, data });
+  const httpStatus = code >= 200 && code < 600 ? code : 500;
+  res.status(httpStatus).json({ code, message, data });
 };
 
 // ================= STUDENTS =================
@@ -99,6 +119,29 @@ router.put('/students/:id', async (req, res) => {
   }
 });
 
+// DELETE /students/batch - 批量删除学生（级联删除关联数据）
+// 请求体：{ ids: [1, 2, 3] }
+// 注意：必须放在 DELETE /students/:id 之前，否则 "batch" 会被 :id 参数匹配
+router.delete('/students/batch', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return sendResponse(res, null, 'ids 不能为空', 400);
+    const db = await getDb();
+    // 逐个删除，复用单条学生的级联删除逻辑
+    for (const id of ids) {
+      await db.run('DELETE FROM scores WHERE student_id = ?', [id]);
+      await db.run('DELETE FROM points WHERE student_id = ?', [id]);
+      await db.run('DELETE FROM leaves WHERE student_id = ?', [id]);
+      await db.run('DELETE FROM evaluations WHERE student_id = ?', [id]);
+      await db.run('DELETE FROM communications WHERE student_id = ?', [id]);
+      await db.run('DELETE FROM students WHERE id = ?', [id]);
+    }
+    sendResponse(res, { ids });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
 // DELETE /students/:id - 删除学生 (级联删除关联数据)
 router.delete('/students/:id', async (req, res) => {
   try {
@@ -111,6 +154,24 @@ router.delete('/students/:id', async (req, res) => {
     await db.run('DELETE FROM communications WHERE student_id = ?', [id]);
     await db.run('DELETE FROM students WHERE id = ?', [id]);
     sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// GET /students/export - 导出学生花名册为 Excel
+// 注意：必须放在 GET /students/:id 之前，否则 "export" 会被 :id 参数匹配
+router.get('/students/export', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rows = await db.all('SELECT * FROM students ORDER BY id ASC');
+    const worksheet = xlsx.utils.json_to_sheet(rows);
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, worksheet, '学生花名册');
+    const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="students.xlsx"');
+    res.send(buffer);
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -151,14 +212,14 @@ router.get('/scores', async (req, res) => {
 router.post('/scores/import', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return sendResponse(res, null, 'No file uploaded', 400);
-    
+
     const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
-    
+
     const db = await getDb();
     let imported = 0;
-    
+
     for (const row of data) {
       if (!row.student_id || !row.subject || row.score === undefined) continue;
       await db.run(
@@ -167,8 +228,95 @@ router.post('/scores/import', upload.single('file'), async (req, res) => {
       );
       imported++;
     }
-    
+
     sendResponse(res, { imported });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /scores - 单条成绩录入
+router.post('/scores', async (req, res) => {
+  try {
+    const { student_id, subject, score, exam_name } = req.body;
+    if (!student_id || !subject || score === undefined) {
+      return sendResponse(res, null, 'student_id, subject, score 不能为空', 400);
+    }
+    const db = await getDb();
+    const result = await db.run(
+      'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
+      [student_id, subject, score, exam_name || '期中考试']
+    );
+    sendResponse(res, { id: result.lastID });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /scores/:id - 更新单条成绩
+router.put('/scores/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { student_id, subject, score, exam_name } = req.body;
+    const db = await getDb();
+    const existing = await db.get('SELECT id FROM scores WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '成绩记录不存在', 404);
+    await db.run(
+      'UPDATE scores SET student_id=?, subject=?, score=?, exam_name=? WHERE id=?',
+      [student_id, subject, score, exam_name, id]
+    );
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /scores/batch - 批量删除成绩
+// 请求体：{ ids: [1, 2, 3] }
+// 注意：必须放在 DELETE /scores/:id 之前，否则 "batch" 会被 :id 参数匹配
+router.delete('/scores/batch', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return sendResponse(res, null, 'ids 不能为空', 400);
+    const db = await getDb();
+    // 使用占位符列表批量删除
+    const placeholders = ids.map(() => '?').join(',');
+    await db.run(`DELETE FROM scores WHERE id IN (${placeholders})`, ids);
+    sendResponse(res, { ids });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /scores/:id - 删除单条成绩
+router.delete('/scores/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    await db.run('DELETE FROM scores WHERE id = ?', [id]);
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// GET /scores/export - 导出成绩为 Excel
+router.get('/scores/export', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rows = await db.all(`
+      SELECT s.id, st.name as student_name, s.subject, s.score, s.exam_name
+      FROM scores s
+      LEFT JOIN students st ON s.student_id = st.id
+      ORDER BY s.exam_name DESC, s.score DESC
+    `);
+    const worksheet = xlsx.utils.json_to_sheet(rows);
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, worksheet, '成绩');
+    const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="scores.xlsx"');
+    res.send(buffer);
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -207,6 +355,22 @@ router.post('/points', async (req, res) => {
   }
 });
 
+// DELETE /points/batch - 批量删除积分记录
+// 请求体：{ ids: [1, 2, 3] }
+// 注意：必须放在 DELETE /points/:id 之前，否则 "batch" 会被 :id 参数匹配
+router.delete('/points/batch', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return sendResponse(res, null, 'ids 不能为空', 400);
+    const db = await getDb();
+    const placeholders = ids.map(() => '?').join(',');
+    await db.run(`DELETE FROM points WHERE id IN (${placeholders})`, ids);
+    sendResponse(res, { ids });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
 // DELETE /points/:id - 删除积分记录
 router.delete('/points/:id', async (req, res) => {
   try {
@@ -221,23 +385,90 @@ router.delete('/points/:id', async (req, res) => {
 
 // ================= SEATS =================
 
+// 读取 settings 表中某个 key 的值
+const getSetting = async (db, key) => {
+  const row = await db.get('SELECT value FROM settings WHERE key = ?', [key]);
+  return row ? row.value : null;
+};
+
+// 写入 settings 表（存在则更新，不存在则插入）
+const setSetting = async (db, key, value) => {
+  const existing = await db.get('SELECT key FROM settings WHERE key = ?', [key]);
+  if (existing) {
+    await db.run('UPDATE settings SET value = ? WHERE key = ?', [value, key]);
+  } else {
+    await db.run('INSERT INTO settings (key, value) VALUES (?, ?)', [key, value]);
+  }
+};
+
 // GET /seats - 获取座位表
+// 读取 settings 中的 seat_columns（默认 4）与 seat_layout（JSON 布局）
+// 若有保存的布局则按布局返回，否则按学号顺序与列数自动排列
 router.get('/seats', async (req, res) => {
   try {
     const db = await getDb();
-    const students = await db.all('SELECT id, name FROM students ORDER BY id ASC');
-    // Simple random or sequential seating logic
-    // For now, return sequential pairs
-    const seats = [];
-    let row = 0;
-    for (let i = 0; i < students.length; i += 2) {
-      seats.push({
-        row: row++,
-        col1: students[i] || null,
-        col2: students[i+1] || null
-      });
+    // 读取列数设置（默认 4）
+    const colValue = await getSetting(db, 'seat_columns');
+    let columns = colValue ? parseInt(colValue, 10) : 4;
+    if (!columns || columns < 1) columns = 4;
+    // 读取已保存的座位布局
+    const layoutValue = await getSetting(db, 'seat_layout');
+    let savedLayout = null;
+    if (layoutValue) {
+      try { savedLayout = JSON.parse(layoutValue); } catch (e) { savedLayout = null; }
     }
-    sendResponse(res, seats);
+
+    const students = await db.all('SELECT id, name FROM students ORDER BY id ASC');
+
+    // 将扁平布局（[{student_id,row,col}]）构建为二维 rows 网格
+    const buildRows = (entries) => {
+      const rowCount = entries.length
+        ? Math.max(...entries.map((e) => e.row)) + 1
+        : 0;
+      const rows = [];
+      for (let r = 0; r < rowCount; r++) {
+        rows.push(new Array(columns).fill(null));
+      }
+      entries.forEach((e) => {
+        if (e.row >= 0 && e.row < rows.length && e.col >= 0 && e.col < columns) {
+          const stu = students.find((s) => s.id === e.student_id);
+          rows[e.row][e.col] = stu ? { student_id: stu.id, name: stu.name } : null;
+        }
+      });
+      return rows;
+    };
+
+    let rows;
+    if (savedLayout && Array.isArray(savedLayout) && savedLayout.length) {
+      rows = buildRows(savedLayout);
+    } else {
+      // 没有保存布局时按学号顺序自动排列
+      const autoLayout = students.map((s, idx) => ({
+        student_id: s.id,
+        row: Math.floor(idx / columns),
+        col: idx % columns
+      }));
+      rows = buildRows(autoLayout);
+    }
+
+    sendResponse(res, { columns, rows });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /seats - 保存座位表
+// 接收 { columns, layout }，layout 为 [{student_id,row,col}, ...]
+// 保存到 settings 表的 seat_columns 与 seat_layout
+router.put('/seats', async (req, res) => {
+  try {
+    const { columns, layout } = req.body;
+    const db = await getDb();
+    let cols = parseInt(columns, 10);
+    if (!cols || cols < 1) cols = 4;
+    await setSetting(db, 'seat_columns', String(cols));
+    await setSetting(db, 'seat_layout', JSON.stringify(Array.isArray(layout) ? layout : []));
+    sendResponse(res, { columns: cols, saved: true });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -261,27 +492,71 @@ router.get('/leaves', async (req, res) => {
   }
 });
 
-// POST /leaves - 登记/销假
-router.post('/leaves', async (req, res) => {
+// POST /leaves - 登记/销假（multipart/form-data，支持上传请假条图片）
+router.post('/leaves', leaveImageUpload.single('image'), async (req, res) => {
   try {
     const { student_id, start_date, end_date, reason, status, id } = req.body;
     const db = await getDb();
-    
+
     if (id) {
       // Update existing leave (e.g., 销假)
-      await db.run(
-        'UPDATE leaves SET status = ? WHERE id = ?',
-        [status || '已销假', id]
-      );
+      // 若同时上传了新图片，则一并更新 image_path
+      if (req.file) {
+        await db.run(
+          'UPDATE leaves SET status = ?, image_path = ? WHERE id = ?',
+          [status || '已销假', req.file.filename, id]
+        );
+      } else {
+        await db.run(
+          'UPDATE leaves SET status = ? WHERE id = ?',
+          [status || '已销假', id]
+        );
+      }
       sendResponse(res, { id });
     } else {
       // Create new leave
+      // 如果有图片文件，将文件名存入 image_path
+      const imagePath = req.file ? req.file.filename : null;
       const result = await db.run(
-        'INSERT INTO leaves (student_id, start_date, end_date, reason, status) VALUES (?, ?, ?, ?, ?)',
-        [student_id, start_date, end_date, reason, status || '登记']
+        'INSERT INTO leaves (student_id, start_date, end_date, reason, status, image_path) VALUES (?, ?, ?, ?, ?, ?)',
+        [student_id, start_date, end_date, reason, status || '登记', imagePath]
       );
-      sendResponse(res, { id: result.lastID });
+      sendResponse(res, { id: result.lastID, image_path: imagePath });
     }
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /leaves/batch-status - 批量销假
+// 请求体：{ ids: [1, 2, 3], status: '已销假' }
+// 注意：必须放在 DELETE /leaves/:id 之前；同时由于无 PUT /leaves/:id，
+// 不存在路径冲突，但保留提示便于后续扩展
+router.put('/leaves/batch-status', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const status = req.body?.status || '已销假';
+    if (!ids.length) return sendResponse(res, null, 'ids 不能为空', 400);
+    const db = await getDb();
+    const placeholders = ids.map(() => '?').join(',');
+    await db.run(`UPDATE leaves SET status = ? WHERE id IN (${placeholders})`, [status, ...ids]);
+    sendResponse(res, { ids, status });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /leaves/batch - 批量删除请假记录
+// 请求体：{ ids: [1, 2, 3] }
+// 注意：必须放在 DELETE /leaves/:id 之前，否则 "batch" 会被 :id 参数匹配
+router.delete('/leaves/batch', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return sendResponse(res, null, 'ids 不能为空', 400);
+    const db = await getDb();
+    const placeholders = ids.map(() => '?').join(',');
+    await db.run(`DELETE FROM leaves WHERE id IN (${placeholders})`, ids);
+    sendResponse(res, { ids });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -389,6 +664,28 @@ router.put('/evaluations/:id', async (req, res) => {
   }
 });
 
+// GET /evaluations/export - 导出评价表为 Excel
+router.get('/evaluations/export', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rows = await db.all(`
+      SELECT e.id, st.name as student_name, e.teacher_score, e.final_grade, e.comment
+      FROM evaluations e
+      LEFT JOIN students st ON e.student_id = st.id
+      ORDER BY e.student_id ASC
+    `);
+    const worksheet = xlsx.utils.json_to_sheet(rows);
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, worksheet, '评价表');
+    const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="evaluations.xlsx"');
+    res.send(buffer);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
 // ================= COMMUNICATIONS =================
 
 // GET /communications - 沟通记录
@@ -417,6 +714,22 @@ router.post('/communications', async (req, res) => {
       [student_id, date, method, content, feedback]
     );
     sendResponse(res, { id: result.lastID });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /communications/batch - 批量删除沟通记录
+// 请求体：{ ids: [1, 2, 3] }
+// 注意：必须放在 DELETE /communications/:id 之前，否则 "batch" 会被 :id 参数匹配
+router.delete('/communications/batch', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (!ids.length) return sendResponse(res, null, 'ids 不能为空', 400);
+    const db = await getDb();
+    const placeholders = ids.map(() => '?').join(',');
+    await db.run(`DELETE FROM communications WHERE id IN (${placeholders})`, ids);
+    sendResponse(res, { ids });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }

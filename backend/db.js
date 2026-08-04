@@ -40,6 +40,7 @@ async function initDb() {
 
     CREATE TABLE IF NOT EXISTS recitations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER,
       student_name TEXT,
       subject TEXT,
       article TEXT,
@@ -84,6 +85,7 @@ async function initDb() {
       end_date TEXT,
       reason TEXT,
       status TEXT DEFAULT '登记',
+      image_path TEXT,
       FOREIGN KEY (student_id) REFERENCES students(id)
     );
 
@@ -112,12 +114,44 @@ async function initDb() {
     );
   `);
 
+  // 为已存在的 recitations 表追加 student_id 列（关联 students 表，向后兼容旧数据）
+  // 列已存在时会报错，忽略即可
+  try {
+    await db.run('ALTER TABLE recitations ADD COLUMN student_id INTEGER');
+  } catch (e) { /* student_id 列已存在，忽略 */ }
+
+  // 为已存在的 leaves 表追加 image_path 列（用于存储请假条图片路径）
+  // 列已存在时会报错，忽略即可
+  try {
+    await db.run('ALTER TABLE leaves ADD COLUMN image_path TEXT');
+  } catch (e) { /* image_path 列已存在，忽略 */ }
+
   // 插入默认教师名称（仅首次初始化时）
   const existing = await db.get("SELECT key FROM settings WHERE key = 'teacher_name'");
   if (!existing) {
     await db.run("INSERT INTO settings (key, value) VALUES ('teacher_name', '陈老师')");
   }
-  
+
+  // 插入默认登录配置（轻量级方案：明文存储，首次启动默认 admin / admin123）
+  const existingAuthUser = await db.get("SELECT key FROM settings WHERE key = 'auth_username'");
+  if (!existingAuthUser) {
+    await db.run("INSERT INTO settings (key, value) VALUES ('auth_username', 'admin')");
+  }
+  const existingAuthPwd = await db.get("SELECT key FROM settings WHERE key = 'auth_password'");
+  if (!existingAuthPwd) {
+    await db.run("INSERT INTO settings (key, value) VALUES ('auth_password', 'admin123')");
+  }
+
+  // 初始化年级信息（入学年份、当前年级），仅首次初始化时插入
+  const existingGradeYear = await db.get("SELECT key FROM settings WHERE key = 'grade_year'");
+  if (!existingGradeYear) {
+    await db.run("INSERT INTO settings (key, value) VALUES ('grade_year', '2025')");
+  }
+  const existingGradeLevel = await db.get("SELECT key FROM settings WHERE key = 'grade_level'");
+  if (!existingGradeLevel) {
+    await db.run("INSERT INTO settings (key, value) VALUES ('grade_level', '一年级')");
+  }
+
   console.log('Database initialized and tables created/verified.');
 }
 

@@ -8,6 +8,8 @@ const { initDb } = require('./db');
 const teacherRoutes = require('./routes/teacher');
 const advisorRoutes = require('./routes/advisor');
 const statsRoutes = require('./routes/stats');
+const authRoutes = require('./routes/auth');
+const { authMiddleware } = require('./middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,14 +24,19 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 const API_PREFIX = '/api/v1';
-app.use(API_PREFIX, teacherRoutes);
-app.use(API_PREFIX, advisorRoutes);
-app.use(API_PREFIX, statsRoutes);
 
-// Health check
+// 不需要认证的路由（需在 authMiddleware 之前挂载）
+// auth 路由：login / check 不需要认证，password 路由内部已加 authMiddleware
+app.use(API_PREFIX + '/auth', authRoutes);
+// 健康检查不需要认证
 app.get(API_PREFIX + '/health', (req, res) => {
   res.json({ code: 200, message: 'Server is running normally' });
 });
+
+// 需要认证的路由
+app.use(API_PREFIX, authMiddleware, teacherRoutes);
+app.use(API_PREFIX, authMiddleware, advisorRoutes);
+app.use(API_PREFIX, authMiddleware, statsRoutes);
 
 // 若前端已构建(dist 存在), 由后端直接托管前端页面,
 // 无需 Nginx 也可通过 http://localhost:3000 直接访问整个系统。

@@ -9,9 +9,14 @@
               <el-icon class="info-icon"><QuestionFilled /></el-icon>
             </el-tooltip>
           </div>
-          <el-button type="primary" :loading="generating" @click="handleGenerate">
-            <el-icon><MagicStick /></el-icon>一键生成评价
-          </el-button>
+          <div class="action-buttons">
+            <el-button type="success" plain :loading="exporting" @click="handleExport">
+              <el-icon><Download /></el-icon>导出评价表
+            </el-button>
+            <el-button type="primary" :loading="generating" @click="handleGenerate">
+              <el-icon><MagicStick /></el-icon>一键生成评价
+            </el-button>
+          </div>
         </div>
       </template>
 
@@ -73,11 +78,12 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getEvaluations, generateEvaluations, updateEvaluation } from '../../api'
+import { getEvaluations, generateEvaluations, updateEvaluation, exportEvaluations } from '../../api'
 
 const loading = ref(false)
 const saving = ref(false)
 const generating = ref(false)
+const exporting = ref(false)
 const dialogVisible = ref(false)
 const evaluations = ref([])
 
@@ -142,6 +148,25 @@ const handleSave = async () => {
   }
 }
 
+// 导出期末评价 Excel
+const handleExport = async () => {
+  exporting.value = true
+  try {
+    const blob = await exportEvaluations()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `期末评价表_${new Date().toISOString().slice(0, 10)}.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('导出成功')
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    exporting.value = false
+  }
+}
+
 onMounted(loadData)
 </script>
 
@@ -161,6 +186,10 @@ onMounted(loadData)
 .info-icon {
   color: #909399;
   cursor: pointer;
+}
+.action-buttons {
+  display: flex;
+  gap: 10px;
 }
 .score-good { color: #67c23a; font-weight: bold; }
 .score-mid { color: #409eff; font-weight: bold; }

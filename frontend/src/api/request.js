@@ -6,6 +6,18 @@ const service = axios.create({
   timeout: 30000
 })
 
+// 请求拦截器：自动在 header 中带上 token
+service.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
+  (error) => Promise.reject(error)
+)
+
 service.interceptors.response.use(
   (response) => {
     const res = response.data
@@ -19,6 +31,16 @@ service.interceptors.response.use(
     return res
   },
   (error) => {
+    // 401 未登录或登录过期：清除登录信息并跳转登录页
+    if (error.response && error.response.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('username')
+      // 避免在登录页重复跳转
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+      return Promise.reject(error)
+    }
     const message =
       (error.response && error.response.data && error.response.data.message) ||
       error.message ||

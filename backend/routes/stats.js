@@ -3,7 +3,8 @@ const router = express.Router();
 const { getDb } = require('../db');
 
 const sendResponse = (res, data = {}, message = 'success', code = 200) => {
-  res.status(code === 200 ? 200 : 500).json({ code, message, data });
+  const httpStatus = code >= 200 && code < 600 ? code : 500;
+  res.status(httpStatus).json({ code, message, data });
 };
 
 // GET /stats - 数据看板统计

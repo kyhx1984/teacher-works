@@ -65,14 +65,29 @@
     </el-card>
 
     <el-dialog v-model="dialogVisible" title="登记背书任务" width="500px">
-      <el-form :model="form" label-width="90px">
-        <el-form-item label="学生姓名">
-          <el-input v-model="form.student_name" placeholder="多个学生用逗号或顿号分隔" />
+      <el-form ref="formRef" :model="form" :rules="recitationRules" label-width="90px">
+        <el-form-item label="学生" prop="student_ids" required>
+          <el-select
+            v-model="form.student_ids"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="请选择学生（可多选）"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="s in students"
+              :key="s.id"
+              :label="`${s.name}（${s.id}）`"
+              :value="s.id"
+            />
+          </el-select>
         </el-form-item>
-        <el-form-item label="科目">
+        <el-form-item label="科目" prop="subject">
           <el-input v-model="form.subject" placeholder="例如：语文" />
         </el-form-item>
-        <el-form-item label="篇目名称">
+        <el-form-item label="篇目名称" prop="article">
           <el-input v-model="form.article" placeholder="例如：出师表" />
         </el-form-item>
       </el-form>
@@ -87,9 +102,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getRecitations, createRecitation, updateRecitation, deleteRecitation } from '../../api'
+import { getRecitations, createRecitation, updateRecitation, deleteRecitation, getStudents } from '../../api'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -98,14 +113,24 @@ const filterStatus = ref(null)
 const dialogVisible = ref(false)
 const allList = ref([])
 const filtered = ref([])
+const students = ref([])
+const formRef = ref()
 
-const form = ref({ student_name: '', subject: '语文', article: '' })
+// 表单：使用 student_ids 数组支持批量选择
+const form = ref({ student_ids: [], subject: '语文', article: '' })
+
+// 背书表单校验规则
+const recitationRules = {
+  student_ids: [{ required: true, message: '请选择学生', trigger: 'change', type: 'array' }],
+  subject: [{ required: true, message: '请输入科目', trigger: 'blur' }],
+  article: [{ required: true, message: '请输入篇目', trigger: 'blur' }]
+}
 
 const filterList = () => {
   filtered.value = allList.value.filter((item) => {
     const matchQuery =
       !searchQuery.value ||
-      item.student_name.includes(searchQuery.value) ||
+      (item.student_name || '').includes(searchQuery.value) ||
       (item.article || '').includes(searchQuery.value)
     const matchStatus =
       filterStatus.value === null || filterStatus.value === '' || item.status === filterStatus.value
@@ -114,14 +139,19 @@ const filterList = () => {
 }
 
 const openCreate = () => {
-  form.value = { student_name: '', subject: '语文', article: '' }
+  form.value = { student_ids: [], subject: '语文', article: '' }
   dialogVisible.value = true
+  nextTick(() => {
+    formRef.value?.clearValidate()
+  })
 }
 
 const loadList = async () => {
   loading.value = true
   try {
-    allList.value = await getRecitations()
+    const [recitationRows, studentRows] = await Promise.all([getRecitations(), getStudents()])
+    allList.value = recitationRows
+    students.value = studentRows
     filterList()
   } catch (e) {
     // 拦截器已提示
@@ -130,26 +160,32 @@ const loadList = async () => {
   }
 }
 
+// 保存：循环为每个选中学生创建一条背书任务，优先传 student_id
 const handleSave = async () => {
-  if (!form.value.student_name || !form.value.article) {
-    ElMessage.warning('请填写学生姓名和篇目名称')
+  if (!formRef.value) return
+  try {
+    // 校验通过再提交，失败时不弹 ElMessage（Element Plus 自动标红）
+    await formRef.value.validate()
+  } catch (e) {
     return
   }
   saving.value = true
   try {
-    const names = form.value.student_name
-      .split(/[,，、\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-    for (const name of names) {
+    // 通过 id 查找学生姓名（向后端兼容旧逻辑同时传 student_name）
+    const findName = (id) => {
+      const s = students.value.find((x) => x.id === id)
+      return s ? s.name : ''
+    }
+    for (const sid of form.value.student_ids) {
       await createRecitation({
-        student_name: name,
+        student_id: sid,
+        student_name: findName(sid),
         subject: form.value.subject,
         article: form.value.article,
         status: 0
       })
     }
-    ElMessage.success(`已登记 ${names.length} 条背书任务`)
+    ElMessage.success(`已登记 ${form.value.student_ids.length} 条背书任务`)
     dialogVisible.value = false
     loadList()
   } catch (e) {

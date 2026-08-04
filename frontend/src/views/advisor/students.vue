@@ -15,6 +15,17 @@
             </template>
           </el-input>
           <div class="action-buttons">
+            <el-button
+              v-if="selectedRows.length"
+              type="danger"
+              plain
+              @click="handleBatchDelete"
+            >
+              <el-icon><Delete /></el-icon>批量删除（{{ selectedRows.length }}）
+            </el-button>
+            <el-button type="success" plain :loading="exporting" @click="handleExport">
+              <el-icon><Download /></el-icon>导出花名册
+            </el-button>
             <el-button type="success" plain @click="importVisible = true">
               <el-icon><Download /></el-icon>Excel导入
             </el-button>
@@ -25,7 +36,8 @@
         </div>
       </template>
 
-      <el-table :data="filtered" style="width: 100%" v-loading="loading">
+      <el-table :data="pagedData" style="width: 100%" v-loading="loading" @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="id" label="学号" width="80" />
         <el-table-column prop="name" label="姓名" width="100" />
         <el-table-column prop="gender" label="性别" width="70" />
@@ -52,14 +64,23 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[20, 50, 100]"
+        :total="filtered.length"
+        layout="total, sizes, prev, pager, next"
+        style="margin-top: 16px; justify-content: flex-end;"
+      />
     </el-card>
 
     <el-dialog v-model="dialogVisible" :title="form.id ? '编辑学生' : '新增学生'" width="640px">
-      <el-form :model="form" label-width="100px">
-        <el-form-item label="姓名" required>
+      <el-form ref="formRef" :model="form" :rules="studentRules" label-width="100px">
+        <el-form-item label="姓名" prop="name" required>
           <el-input v-model="form.name" placeholder="请输入姓名" />
         </el-form-item>
-        <el-form-item label="性别">
+        <el-form-item label="性别" prop="gender">
           <el-radio-group v-model="form.gender">
             <el-radio label="男">男</el-radio>
             <el-radio label="女">女</el-radio>
@@ -77,7 +98,7 @@
         <el-form-item label="家长姓名">
           <el-input v-model="form.parent_name" />
         </el-form-item>
-        <el-form-item label="联系电话">
+        <el-form-item label="联系电话" prop="phone">
           <el-input v-model="form.phone" />
         </el-form-item>
         <el-form-item label="家庭住址">
@@ -151,22 +172,46 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { getStudents, createStudent, updateStudent, deleteStudent, importStudents } from '../../api'
+import { ref, computed, nextTick, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  getStudents,
+  createStudent,
+  updateStudent,
+  deleteStudent,
+  batchDeleteStudents,
+  importStudents,
+  exportStudents
+} from '../../api'
 
 const loading = ref(false)
 const saving = ref(false)
 const importing = ref(false)
+const exporting = ref(false)
 const searchQuery = ref('')
 const dialogVisible = ref(false)
 const importVisible = ref(false)
 const detailVisible = ref(false)
 const importUploadRef = ref()
+const formRef = ref()
 const allStudents = ref([])
 const filtered = ref([])
 const detail = ref(null)
 const importFile = ref(null)
+
+// 批量操作：选中行
+const selectedRows = ref([])
+const handleSelectionChange = (val) => { selectedRows.value = val }
+
+// 分页：当前页与每页条数
+const currentPage = ref(1)
+const pageSize = ref(20)
+
+// 当前页数据（基于过滤后的数据切片）
+const pagedData = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filtered.value.slice(start, start + pageSize.value)
+})
 
 const form = ref({
   id: null,
@@ -181,12 +226,21 @@ const form = ref({
   special_type: ''
 })
 
+// 学生表单校验规则
+const studentRules = {
+  name: [{ required: true, message: '请输入学生姓名', trigger: 'blur' }],
+  gender: [{ required: true, message: '请选择性别', trigger: 'change' }],
+  phone: [{ pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号', trigger: 'blur' }]
+}
+
 const filterStudents = () => {
   if (!searchQuery.value) {
     filtered.value = allStudents.value
   } else {
     filtered.value = allStudents.value.filter((s) => s.name.includes(searchQuery.value))
   }
+  // 搜索后重置到第一页
+  currentPage.value = 1
 }
 
 const resetForm = () => {
@@ -207,11 +261,17 @@ const resetForm = () => {
 const openCreate = () => {
   resetForm()
   dialogVisible.value = true
+  nextTick(() => {
+    formRef.value?.clearValidate()
+  })
 }
 
 const openEdit = (row) => {
   form.value = { ...row }
   dialogVisible.value = true
+  nextTick(() => {
+    formRef.value?.clearValidate()
+  })
 }
 
 const viewDetail = (row) => {
@@ -232,8 +292,11 @@ const loadStudents = async () => {
 }
 
 const handleSave = async () => {
-  if (!form.value.name) {
-    ElMessage.warning('请输入学生姓名')
+  if (!formRef.value) return
+  try {
+    // 校验通过再提交，失败时不弹 ElMessage（Element Plus 自动标红）
+    await formRef.value.validate()
+  } catch (e) {
     return
   }
   saving.value = true
@@ -265,6 +328,33 @@ const handleDelete = async (id) => {
   }
 }
 
+// 批量删除学生
+const handleBatchDelete = async () => {
+  if (!selectedRows.value.length) {
+    ElMessage.warning('请先选择学生')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认删除选中的 ${selectedRows.value.length} 名学生？将同时删除其成绩、请假等关联数据。`,
+      '提示',
+      { type: 'warning' }
+    )
+  } catch (e) {
+    // 用户取消
+    return
+  }
+  try {
+    const ids = selectedRows.value.map((r) => r.id)
+    await batchDeleteStudents(ids)
+    ElMessage.success('批量删除成功')
+    selectedRows.value = []
+    loadStudents()
+  } catch (e) {
+    // 拦截器已提示
+  }
+}
+
 const onImportChange = (file) => {
   importFile.value = file.raw
 }
@@ -288,6 +378,25 @@ const handleImport = async () => {
     // 拦截器已提示
   } finally {
     importing.value = false
+  }
+}
+
+// 导出学生花名册 Excel
+const handleExport = async () => {
+  exporting.value = true
+  try {
+    const blob = await exportStudents()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `学生花名册_${new Date().toISOString().slice(0, 10)}.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('导出成功')
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    exporting.value = false
   }
 }
 

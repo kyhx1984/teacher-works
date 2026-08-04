@@ -22,8 +22,10 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // Standard response formatter
+// 正确映射业务状态码到 HTTP 状态码
 const sendResponse = (res, data = {}, message = 'success', code = 200) => {
-  res.status(code === 200 ? 200 : 500).json({ code, message, data });
+  const httpStatus = code >= 200 && code < 600 ? code : 500;
+  res.status(httpStatus).json({ code, message, data });
 };
 
 // ================= RESOURCES =================
@@ -127,11 +129,17 @@ router.delete('/exams/:id', async (req, res) => {
 
 // ================= RECITATIONS =================
 
-// GET /recitations - 背书表列表
+// GET /recitations - 背书表列表（LEFT JOIN students 表，返回 student_id, student_name）
+// 使用 COALESCE(s.name, r.student_name)：优先取关联学生的姓名，无关联时回退到表中存储的 student_name，保证向后兼容
 router.get('/recitations', async (req, res) => {
   try {
     const db = await getDb();
-    const recitations = await db.all('SELECT * FROM recitations ORDER BY id DESC');
+    const recitations = await db.all(`
+      SELECT r.*, COALESCE(s.name, r.student_name) as student_name
+      FROM recitations r
+      LEFT JOIN students s ON r.student_id = s.id
+      ORDER BY r.id DESC
+    `);
     sendResponse(res, recitations);
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -139,13 +147,26 @@ router.get('/recitations', async (req, res) => {
 });
 
 // POST /recitations - 登记背书
+// 优先使用 student_id（若有则同时查出 student_name 存入），否则使用 student_name
 router.post('/recitations', async (req, res) => {
   try {
-    const { student_name, subject, article, status } = req.body;
+    const { student_id, student_name, subject, article, status } = req.body;
     const db = await getDb();
+
+    let finalStudentId = student_id || null;
+    let finalStudentName = student_name || '';
+
+    // 若提供了 student_id，则查出对应的 student_name 一并存入，便于显示
+    if (finalStudentId) {
+      const student = await db.get('SELECT name FROM students WHERE id = ?', [finalStudentId]);
+      if (student) {
+        finalStudentName = student.name;
+      }
+    }
+
     const result = await db.run(
-      'INSERT INTO recitations (student_name, subject, article, status) VALUES (?, ?, ?, ?)',
-      [student_name, subject, article, status || 0]
+      'INSERT INTO recitations (student_id, student_name, subject, article, status) VALUES (?, ?, ?, ?, ?)',
+      [finalStudentId, finalStudentName, subject, article, status || 0]
     );
     sendResponse(res, { id: result.lastID });
   } catch (err) {
@@ -190,6 +211,42 @@ router.get('/settings', async (req, res) => {
     const settings = {};
     rows.forEach(row => { settings[row.key] = row.value; });
     sendResponse(res, settings);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /settings/upgrade-grade - 年级升级
+// 读取当前年级与入学年份，将年级向后推一级（六年级封顶），年份 +1
+router.post('/settings/upgrade-grade', async (req, res) => {
+  try {
+    const db = await getDb();
+    // 读取当前年级与入学年份
+    const gradeLevel = await db.get('SELECT value FROM settings WHERE key = ?', ['grade_level']);
+    const gradeYear = await db.get('SELECT value FROM settings WHERE key = ?', ['grade_year']);
+
+    // 年级顺序映射
+    const gradeOrder = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级'];
+    const currentIndex = gradeOrder.indexOf(gradeLevel?.value || '一年级');
+    const nextIndex = Math.min(currentIndex + 1, gradeOrder.length - 1);
+    const nextGrade = gradeOrder[nextIndex];
+    const nextYear = String(Number(gradeYear?.value || '2025') + 1);
+
+    // 更新年级与入学年份
+    const existingLevel = await db.get('SELECT key FROM settings WHERE key = ?', ['grade_level']);
+    if (existingLevel) {
+      await db.run('UPDATE settings SET value = ? WHERE key = ?', [nextGrade, 'grade_level']);
+    } else {
+      await db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['grade_level', nextGrade]);
+    }
+    const existingYear = await db.get('SELECT key FROM settings WHERE key = ?', ['grade_year']);
+    if (existingYear) {
+      await db.run('UPDATE settings SET value = ? WHERE key = ?', [nextYear, 'grade_year']);
+    } else {
+      await db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['grade_year', nextYear]);
+    }
+
+    sendResponse(res, { grade_level: nextGrade, grade_year: nextYear }, '年级升级成功');
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
