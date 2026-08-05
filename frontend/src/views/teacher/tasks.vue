@@ -21,8 +21,16 @@
         </div>
       </template>
 
-      <el-table :data="filteredTasks" style="width: 100%" v-loading="loading">
-        <el-table-column prop="title" label="任务标题" min-width="200" show-overflow-tooltip />
+      <el-table :data="filteredTasks" style="width: 100%" v-loading="loading" :row-class-name="getRowClassName">
+        <el-table-column prop="title" label="任务标题" min-width="200" show-overflow-tooltip>
+          <template #default="scope">
+            <div class="task-title-cell">
+              <span>{{ scope.row.title }}</span>
+              <el-tag v-if="isOverdue(scope.row)" type="danger" size="small" class="alert-tag">已逾期</el-tag>
+              <el-tag v-else-if="isDueSoon(scope.row)" type="warning" size="small" class="alert-tag">即将到期</el-tag>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="priority" label="优先级" width="100">
           <template #default="scope">
             <el-tag :type="getPriorityType(scope.row.priority)">
@@ -39,7 +47,7 @@
         </el-table-column>
         <el-table-column prop="due_date" label="截止日期" width="120">
           <template #default="scope">
-            <span :class="{ 'overdue': isOverdue(scope.row) }">
+            <span :class="{ 'overdue': isOverdue(scope.row), 'due-soon': isDueSoon(scope.row) }">
               {{ scope.row.due_date || '-' }}
             </span>
           </template>
@@ -178,6 +186,21 @@ const isOverdue = (task) => {
   return new Date(task.due_date) < new Date()
 }
 
+const isDueSoon = (task) => {
+  if (!task.due_date || task.status === 'completed') return false
+  const dueDate = new Date(task.due_date)
+  const today = new Date()
+  const diffDays = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24))
+  return diffDays >= 0 && diffDays <= 3
+}
+
+const getRowClassName = ({ row }) => {
+  if (row.status === 'completed') return 'completed-row'
+  if (isOverdue(row)) return 'overdue-row'
+  if (isDueSoon(row)) return 'due-soon-row'
+  return ''
+}
+
 const loadData = async () => {
   loading.value = true
   try {
@@ -267,5 +290,26 @@ onMounted(loadData)
 .overdue {
   color: #f56c6c;
   font-weight: bold;
+}
+.due-soon {
+  color: #e6a23c;
+  font-weight: bold;
+}
+.task-title-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.alert-tag {
+  margin-left: 0;
+}
+:deep(.overdue-row) {
+  background-color: #fef0f0 !important;
+}
+:deep(.due-soon-row) {
+  background-color: #fdf6ec !important;
+}
+:deep(.completed-row) {
+  background-color: #f0f9eb !important;
 }
 </style>

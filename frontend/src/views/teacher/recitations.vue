@@ -192,6 +192,12 @@
     <!-- 添加学生对话框 -->
     <el-dialog v-model="addStudentsDialogVisible" title="添加学生到任务" width="500px">
       <el-form label-width="100px">
+        <el-form-item label="快捷操作">
+          <el-button type="primary" plain @click="addAllStudents">
+            <el-icon><UserFilled /></el-icon>一键添加全班
+          </el-button>
+          <el-button @click="selectedStudentIds = []">清空选择</el-button>
+        </el-form-item>
         <el-form-item label="选择学生">
           <el-select
             v-model="selectedStudentIds"
@@ -456,6 +462,12 @@ const availableStudents = computed(() => {
 const openAddStudents = () => {
   selectedStudentIds.value = []
   addStudentsDialogVisible.value = true
+}
+
+// 一键添加全班学生
+const addAllStudents = () => {
+  selectedStudentIds.value = availableStudents.value.map(s => s.id)
+  ElMessage.success(`已选择 ${selectedStudentIds.value.length} 名学生`)
 }
 
 // 添加学生到任务

@@ -172,9 +172,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import * as echarts from 'echarts'
-import { getStats, getLeaves, getScores } from '../../api'
+import { getStats, getLeaves, getScores, getTasks } from '../../api'
 
 const stats = ref({
   resources: 0,
@@ -187,6 +187,7 @@ const stats = ref({
   total_points: 0
 })
 const activities = ref([])
+const pendingTasks = ref([])
 
 // 图表相关
 const leaveChartRef = ref(null)
@@ -278,6 +279,32 @@ const handleResize = () => {
   scoreChartInstance && scoreChartInstance.resize()
 }
 
+// 任务相关辅助函数
+const getPriorityType = (priority) => {
+  const map = { high: 'danger', medium: 'warning', low: 'info' }
+  return map[priority] || 'info'
+}
+
+const getPriorityText = (priority) => {
+  const map = { high: '高', medium: '中', low: '低' }
+  return map[priority] || '中'
+}
+
+const isOverdue = (task) => {
+  if (!task.due_date || task.status === 'completed') return false
+  return new Date(task.due_date) < new Date()
+}
+
+// 加载待办任务
+const loadPendingTasks = async () => {
+  try {
+    const tasks = await getTasks()
+    pendingTasks.value = tasks.filter(t => t.status !== 'completed').slice(0, 5)
+  } catch (e) {
+    console.error('加载待办任务失败:', e)
+  }
+}
+
 onMounted(async () => {
   try {
     const data = await getStats()
@@ -296,6 +323,8 @@ onMounted(async () => {
   } catch (e) {
     // 错误已在拦截器中提示
   }
+  // 加载待办任务
+  loadPendingTasks()
   window.addEventListener('resize', handleResize)
 })
 

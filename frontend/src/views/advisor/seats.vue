@@ -14,6 +14,15 @@
               size="small"
               @change="onColumnsChange"
             />
+            <span class="ctrl-label">行数：</span>
+            <el-input-number
+              v-model="targetRows"
+              :min="1"
+              :max="15"
+              :step="1"
+              size="small"
+              @change="onRowsChange"
+            />
             <el-button type="primary" plain @click="handleShuffle">
               <el-icon><Refresh /></el-icon>随机排座
             </el-button>
@@ -67,6 +76,8 @@ const loading = ref(false)
 const saving = ref(false)
 // 列数（默认 4，范围 3-8）
 const columns = ref(4)
+// 目标行数（默认 8，范围 1-15）
+const targetRows = ref(8)
 // 二维网格：rows[row][col] = { student_id, name } | null
 const rows = ref([])
 // 当前选中的座位 { row, col } | null
@@ -128,6 +139,30 @@ const rearrange = (students) => {
 // 列数变化时按当前学生顺序重新排列
 const onColumnsChange = () => {
   rearrange(collectStudents())
+}
+
+// 行数变化时调整网格行数
+const onRowsChange = () => {
+  const currentStudents = collectStudents()
+  const cols = columns.value
+  const newRows = []
+  
+  // 创建指定行数的网格
+  for (let r = 0; r < targetRows.value; r++) {
+    newRows.push(new Array(cols).fill(null))
+  }
+  
+  // 将学生按顺序填入网格
+  currentStudents.forEach((s, idx) => {
+    const r = Math.floor(idx / cols)
+    const c = idx % cols
+    if (r < targetRows.value) {
+      newRows[r][c] = s
+    }
+  })
+  
+  rows.value = newRows
+  selected.value = null
 }
 
 // 点击座位：第一次选中，第二次交换两个座位的学生
