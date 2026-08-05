@@ -91,7 +91,13 @@ const handleLogin = async () => {
     localStorage.setItem('token', data.token)
     localStorage.setItem('username', data.username)
     ElMessage.success('登录成功')
-    router.push('/dashboard')
+    await router.push('/dashboard')
+    // 强制刷新以确保路由正确加载
+    setTimeout(() => {
+      if (router.currentRoute.value.path !== '/dashboard') {
+        window.location.href = '/dashboard'
+      }
+    }, 100)
   } catch (err) {
     // 错误信息已由 request 拦截器提示
   } finally {

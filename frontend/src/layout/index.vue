@@ -34,6 +34,18 @@
             <el-icon><Reading /></el-icon>
             <span>背书情况</span>
           </el-menu-item>
+          <el-menu-item index="/teacher/homework">
+            <el-icon><EditPen /></el-icon>
+            <span>作业管理</span>
+          </el-menu-item>
+          <el-menu-item index="/teacher/schedule">
+            <el-icon><Calendar /></el-icon>
+            <span>我的课程表</span>
+          </el-menu-item>
+          <el-menu-item index="/teacher/tasks">
+            <el-icon><List /></el-icon>
+            <span>临时工作区</span>
+          </el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="advisor">

@@ -53,6 +53,30 @@ async function initDb() {
       FOREIGN KEY (student_id) REFERENCES students(id)
     );
 
+    -- 背书任务表（第一级）
+    CREATE TABLE IF NOT EXISTS recitation_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      subject TEXT,
+      content TEXT,
+      image_path TEXT,
+      remark TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- 背书记录表（第二级，关联学生和任务）
+    CREATE TABLE IF NOT EXISTS recitation_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      status INTEGER DEFAULT 0,
+      remark TEXT,
+      completed_at DATETIME,
+      FOREIGN KEY (task_id) REFERENCES recitation_tasks(id),
+      FOREIGN KEY (student_id) REFERENCES students(id)
+    );
+
+    -- 保留旧的recitations表以兼容历史数据
     CREATE TABLE IF NOT EXISTS recitations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       student_id INTEGER,
@@ -60,6 +84,30 @@ async function initDb() {
       subject TEXT,
       article TEXT,
       status INTEGER DEFAULT 0
+    );
+
+    -- 作业任务表（第一级）
+    CREATE TABLE IF NOT EXISTS homework_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      subject TEXT,
+      content TEXT,
+      homework_date TEXT,
+      remark TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- 作业记录表（第二级，关联学生和任务）
+    CREATE TABLE IF NOT EXISTS homework_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      status INTEGER DEFAULT 0,
+      score REAL,
+      remark TEXT,
+      completed_at DATETIME,
+      FOREIGN KEY (task_id) REFERENCES homework_tasks(id),
+      FOREIGN KEY (student_id) REFERENCES students(id)
     );
 
     CREATE TABLE IF NOT EXISTS students (
@@ -127,6 +175,31 @@ async function initDb() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    -- 课程表
+    CREATE TABLE IF NOT EXISTS schedule (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      week_day INTEGER NOT NULL,
+      period INTEGER NOT NULL,
+      subject TEXT NOT NULL,
+      teacher TEXT,
+      room TEXT,
+      color TEXT,
+      remark TEXT,
+      UNIQUE(week_day, period)
+    );
+
+    -- 临时工作区任务
+    CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT,
+      priority TEXT DEFAULT 'normal',
+      status TEXT DEFAULT 'pending',
+      due_date TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME
+    );
   `);
 
   // 为已存在的 recitations 表追加 student_id 列（关联 students 表，向后兼容旧数据）
@@ -165,6 +238,14 @@ async function initDb() {
   try {
     await db.run('ALTER TABLE leaves ADD COLUMN remark TEXT');
   } catch (e) { /* remark 列已存在，忽略 */ }
+
+  // 为已存在的 students 表追加 grade 和 class 列（年级和班级）
+  try {
+    await db.run('ALTER TABLE students ADD COLUMN grade TEXT');
+  } catch (e) { /* grade 列已存在，忽略 */ }
+  try {
+    await db.run('ALTER TABLE students ADD COLUMN class TEXT');
+  } catch (e) { /* class 列已存在，忽略 */ }
 
   // 插入默认教师名称（仅首次初始化时）
   const existing = await db.get("SELECT key FROM settings WHERE key = 'teacher_name'");

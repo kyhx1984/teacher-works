@@ -41,6 +41,8 @@
         <el-table-column prop="id" label="学号" width="80" />
         <el-table-column prop="name" label="姓名" width="100" />
         <el-table-column prop="gender" label="性别" width="70" />
+        <el-table-column prop="grade" label="年级" width="100" />
+        <el-table-column prop="class" label="班级" width="100" />
         <el-table-column prop="birth" label="出生年月" width="120" />
         <el-table-column prop="parent_name" label="家长姓名" width="100" />
         <el-table-column prop="phone" label="联系电话" width="140" />
@@ -106,6 +108,12 @@
         </el-form-item>
         <el-form-item label="家庭情况">
           <el-input v-model="form.family_info" placeholder="家庭成员、经济状况等" />
+        </el-form-item>
+        <el-form-item label="年级">
+          <el-input v-model="form.grade" placeholder="如：一年级" />
+        </el-form-item>
+        <el-form-item label="班级">
+          <el-input v-model="form.class" placeholder="如：1班" />
         </el-form-item>
         <el-form-item label="特殊情况">
           <el-switch v-model="form.is_special" :active-value="1" :inactive-value="0" />
@@ -222,6 +230,8 @@ const form = ref({
   phone: '',
   family_info: '',
   address: '',
+  grade: '',
+  class: '',
   is_special: 0,
   special_type: ''
 })
@@ -253,6 +263,8 @@ const resetForm = () => {
     phone: '',
     family_info: '',
     address: '',
+    grade: '',
+    class: '',
     is_special: 0,
     special_type: ''
   }

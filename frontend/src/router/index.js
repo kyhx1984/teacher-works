@@ -38,6 +38,24 @@ const routes = [
         component: () => import('../views/teacher/recitations.vue'),
         meta: { title: '背书情况', icon: 'Reading' }
       },
+      {
+        path: 'teacher/homework',
+        name: 'Homework',
+        component: () => import('../views/teacher/homework.vue'),
+        meta: { title: '作业管理', icon: 'EditPen' }
+      },
+      {
+        path: 'teacher/schedule',
+        name: 'Schedule',
+        component: () => import('../views/teacher/schedule.vue'),
+        meta: { title: '我的课程表', icon: 'Calendar' }
+      },
+      {
+        path: 'teacher/tasks',
+        name: 'Tasks',
+        component: () => import('../views/teacher/tasks.vue'),
+        meta: { title: '临时工作区', icon: 'List' }
+      },
       // 班主任工作
       {
         path: 'advisor/students',

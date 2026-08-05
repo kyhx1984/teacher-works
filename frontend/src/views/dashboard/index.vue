@@ -114,6 +114,41 @@
       <el-col :span="24">
         <el-card shadow="hover">
           <template #header>
+            <div class="card-header-title">待办任务提醒</div>
+          </template>
+          <el-table :data="pendingTasks" style="width: 100%" v-if="pendingTasks.length">
+            <el-table-column prop="title" label="任务标题" />
+            <el-table-column prop="priority" label="优先级" width="100">
+              <template #default="scope">
+                <el-tag :type="getPriorityType(scope.row.priority)">
+                  {{ getPriorityText(scope.row.priority) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="due_date" label="截止日期" width="120">
+              <template #default="scope">
+                <span :class="{ 'overdue': isOverdue(scope.row) }">
+                  {{ scope.row.due_date || '-' }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="100">
+              <template #default="scope">
+                <el-button link type="primary" @click="$router.push('/teacher/tasks')">
+                  查看
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-else description="暂无待办任务" :image-size="80" />
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="20" class="mt-20">
+      <el-col :span="24">
+        <el-card shadow="hover">
+          <template #header>
             <div class="card-header-title">最近班级动态</div>
           </template>
           <el-timeline v-if="activities.length">

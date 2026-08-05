@@ -514,6 +514,560 @@ router.delete('/recitations/:id', async (req, res) => {
   }
 });
 
+// ================= RECITATION TASKS (分级结构) =================
+
+// GET /recitation-tasks - 获取所有背书任务
+router.get('/recitation-tasks', async (req, res) => {
+  try {
+    const db = await getDb();
+    const tasks = await db.all(`
+      SELECT t.*, 
+        COUNT(r.id) as total_students,
+        SUM(CASE WHEN r.status = 1 THEN 1 ELSE 0 END) as completed_students
+      FROM recitation_tasks t
+      LEFT JOIN recitation_records r ON t.id = r.task_id
+      GROUP BY t.id
+      ORDER BY t.created_at DESC
+    `);
+    sendResponse(res, tasks);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /recitation-tasks - 创建背书任务
+router.post('/recitation-tasks', upload.single('image'), async (req, res) => {
+  try {
+    const { title, subject, content, remark } = req.body;
+    const image_path = req.file ? req.file.filename : null;
+    const db = await getDb();
+    const result = await db.run(
+      'INSERT INTO recitation_tasks (title, subject, content, image_path, remark) VALUES (?, ?, ?, ?, ?)',
+      [title, subject, content, image_path, remark]
+    );
+    sendResponse(res, { id: result.lastID });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /recitation-tasks/:id - 更新背书任务
+router.put('/recitation-tasks/:id', upload.single('image'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, subject, content, remark } = req.body;
+    const db = await getDb();
+    
+    const existing = await db.get('SELECT image_path FROM recitation_tasks WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '任务不存在', 404);
+    
+    let image_path = existing.image_path;
+    if (req.file) {
+      // 删除旧图片
+      if (image_path) {
+        const oldPath = path.join(__dirname, '..', 'uploads', image_path);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      }
+      image_path = req.file.filename;
+    }
+    
+    await db.run(
+      'UPDATE recitation_tasks SET title = ?, subject = ?, content = ?, image_path = ?, remark = ? WHERE id = ?',
+      [title, subject, content, image_path, remark, id]
+    );
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /recitation-tasks/:id - 删除背书任务（同时删除相关记录）
+router.delete('/recitation-tasks/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    
+    const task = await db.get('SELECT image_path FROM recitation_tasks WHERE id = ?', [id]);
+    if (task && task.image_path) {
+      const imagePath = path.join(__dirname, '..', 'uploads', task.image_path);
+      if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+    }
+    
+    await db.run('DELETE FROM recitation_records WHERE task_id = ?', [id]);
+    await db.run('DELETE FROM recitation_tasks WHERE id = ?', [id]);
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// GET /recitation-tasks/:id/records - 获取某个任务下的所有背书记录
+router.get('/recitation-tasks/:id/records', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    const records = await db.all(`
+      SELECT r.*, s.name as student_name
+      FROM recitation_records r
+      LEFT JOIN students s ON r.student_id = s.id
+      WHERE r.task_id = ?
+      ORDER BY s.name
+    `, [id]);
+    sendResponse(res, records);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /recitation-tasks/:id/records - 为某个任务批量创建背书记录
+router.post('/recitation-tasks/:id/records', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { student_ids } = req.body;
+    const db = await getDb();
+    
+    const task = await db.get('SELECT id FROM recitation_tasks WHERE id = ?', [id]);
+    if (!task) return sendResponse(res, null, '任务不存在', 404);
+    
+    let inserted = 0;
+    for (const student_id of student_ids) {
+      const exists = await db.get(
+        'SELECT id FROM recitation_records WHERE task_id = ? AND student_id = ?',
+        [id, student_id]
+      );
+      if (!exists) {
+        await db.run(
+          'INSERT INTO recitation_records (task_id, student_id, status) VALUES (?, ?, 0)',
+          [id, student_id]
+        );
+        inserted++;
+      }
+    }
+    sendResponse(res, { inserted });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /recitation-records/:id - 更新背书记录状态
+router.put('/recitation-records/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, remark } = req.body;
+    const db = await getDb();
+    
+    const existing = await db.get('SELECT id FROM recitation_records WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '记录不存在', 404);
+    
+    const completed_at = status === 1 ? new Date().toISOString() : null;
+    await db.run(
+      'UPDATE recitation_records SET status = ?, remark = ?, completed_at = ? WHERE id = ?',
+      [status === 1 ? 1 : 0, remark, completed_at, id]
+    );
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /recitation-records/:id - 删除背书记录
+router.delete('/recitation-records/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    await db.run('DELETE FROM recitation_records WHERE id = ?', [id]);
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// GET /recitation-tasks/:id/export - 导出背书任务完成情况Excel
+router.get('/recitation-tasks/:id/export', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    
+    const task = await db.get('SELECT * FROM recitation_tasks WHERE id = ?', [id]);
+    if (!task) return sendResponse(res, null, '任务不存在', 404);
+    
+    const records = await db.all(`
+      SELECT r.*, s.name as student_name, s.grade, s.class
+      FROM recitation_records r
+      LEFT JOIN students s ON r.student_id = s.id
+      WHERE r.task_id = ?
+      ORDER BY s.class, s.name
+    `, [id]);
+    
+    const data = records.map(r => ({
+      '班级': r.class || '',
+      '姓名': r.student_name || '',
+      '状态': r.status === 1 ? '已完成' : '未完成',
+      '完成时间': r.completed_at ? new Date(r.completed_at).toLocaleString('zh-CN') : '',
+      '备注': r.remark || ''
+    }));
+    
+    const wb = xlsx.utils.book_new();
+    const ws = xlsx.utils.json_to_sheet(data);
+    
+    // 设置列宽
+    ws['!cols'] = [
+      { wch: 10 },
+      { wch: 15 },
+      { wch: 10 },
+      { wch: 20 },
+      { wch: 30 }
+    ];
+    
+    xlsx.utils.book_append_sheet(wb, ws, '背书完成情况');
+    
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(task.title)}_背书完成情况.xlsx"`);
+    res.send(buffer);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// ================= HOMEWORK TASKS (作业管理分级结构) =================
+
+// GET /homework-tasks - 获取所有作业任务
+router.get('/homework-tasks', async (req, res) => {
+  try {
+    const db = await getDb();
+    const tasks = await db.all(`
+      SELECT t.*, 
+        COUNT(r.id) as total_students,
+        SUM(CASE WHEN r.status = 1 THEN 1 ELSE 0 END) as completed_students
+      FROM homework_tasks t
+      LEFT JOIN homework_records r ON t.id = r.task_id
+      GROUP BY t.id
+      ORDER BY t.homework_date DESC, t.created_at DESC
+    `);
+    sendResponse(res, tasks);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /homework-tasks - 创建作业任务
+router.post('/homework-tasks', async (req, res) => {
+  try {
+    const { title, subject, content, homework_date, remark } = req.body;
+    const db = await getDb();
+    const result = await db.run(
+      'INSERT INTO homework_tasks (title, subject, content, homework_date, remark) VALUES (?, ?, ?, ?, ?)',
+      [title, subject, content, homework_date, remark]
+    );
+    sendResponse(res, { id: result.lastID });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /homework-tasks/:id - 更新作业任务
+router.put('/homework-tasks/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, subject, content, homework_date, remark } = req.body;
+    const db = await getDb();
+    
+    const existing = await db.get('SELECT id FROM homework_tasks WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '任务不存在', 404);
+    
+    await db.run(
+      'UPDATE homework_tasks SET title = ?, subject = ?, content = ?, homework_date = ?, remark = ? WHERE id = ?',
+      [title, subject, content, homework_date, remark, id]
+    );
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /homework-tasks/:id - 删除作业任务（同时删除相关记录）
+router.delete('/homework-tasks/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    
+    await db.run('DELETE FROM homework_records WHERE task_id = ?', [id]);
+    await db.run('DELETE FROM homework_tasks WHERE id = ?', [id]);
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// GET /homework-tasks/:id/records - 获取某个任务下的所有作业记录
+router.get('/homework-tasks/:id/records', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    const records = await db.all(`
+      SELECT r.*, s.name as student_name, s.grade, s.class
+      FROM homework_records r
+      LEFT JOIN students s ON r.student_id = s.id
+      WHERE r.task_id = ?
+      ORDER BY s.class, s.name
+    `, [id]);
+    sendResponse(res, records);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /homework-tasks/:id/records - 为某个任务批量创建作业记录
+router.post('/homework-tasks/:id/records', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { student_ids } = req.body;
+    const db = await getDb();
+    
+    const task = await db.get('SELECT id FROM homework_tasks WHERE id = ?', [id]);
+    if (!task) return sendResponse(res, null, '任务不存在', 404);
+    
+    let inserted = 0;
+    for (const student_id of student_ids) {
+      const exists = await db.get(
+        'SELECT id FROM homework_records WHERE task_id = ? AND student_id = ?',
+        [id, student_id]
+      );
+      if (!exists) {
+        await db.run(
+          'INSERT INTO homework_records (task_id, student_id, status) VALUES (?, ?, 0)',
+          [id, student_id]
+        );
+        inserted++;
+      }
+    }
+    sendResponse(res, { inserted });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /homework-records/:id - 更新作业记录状态
+router.put('/homework-records/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, score, remark } = req.body;
+    const db = await getDb();
+    
+    const existing = await db.get('SELECT id FROM homework_records WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '记录不存在', 404);
+    
+    const completed_at = status === 1 ? new Date().toISOString() : null;
+    await db.run(
+      'UPDATE homework_records SET status = ?, score = ?, remark = ?, completed_at = ? WHERE id = ?',
+      [status === 1 ? 1 : 0, score, remark, completed_at, id]
+    );
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /homework-records/:id - 删除作业记录
+router.delete('/homework-records/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    await db.run('DELETE FROM homework_records WHERE id = ?', [id]);
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// GET /homework-tasks/:id/export - 导出作业任务完成情况Excel
+router.get('/homework-tasks/:id/export', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    
+    const task = await db.get('SELECT * FROM homework_tasks WHERE id = ?', [id]);
+    if (!task) return sendResponse(res, null, '任务不存在', 404);
+    
+    const records = await db.all(`
+      SELECT r.*, s.name as student_name, s.grade, s.class
+      FROM homework_records r
+      LEFT JOIN students s ON r.student_id = s.id
+      WHERE r.task_id = ?
+      ORDER BY s.class, s.name
+    `, [id]);
+    
+    const data = records.map(r => ({
+      '班级': r.class || '',
+      '姓名': r.student_name || '',
+      '状态': r.status === 1 ? '已完成' : '未完成',
+      '成绩': r.score || '',
+      '完成时间': r.completed_at ? new Date(r.completed_at).toLocaleString('zh-CN') : '',
+      '备注': r.remark || ''
+    }));
+    
+    const wb = xlsx.utils.book_new();
+    const ws = xlsx.utils.json_to_sheet(data);
+    
+    // 设置列宽
+    ws['!cols'] = [
+      { wch: 10 },
+      { wch: 15 },
+      { wch: 10 },
+      { wch: 10 },
+      { wch: 20 },
+      { wch: 30 }
+    ];
+    
+    xlsx.utils.book_append_sheet(wb, ws, '作业完成情况');
+    
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(task.title)}_作业完成情况.xlsx"`);
+    res.send(buffer);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// ================= SCHEDULE (课程表) =================
+
+// GET /schedule - 获取课程表
+router.get('/schedule', async (req, res) => {
+  try {
+    const db = await getDb();
+    const schedules = await db.all('SELECT * FROM schedule ORDER BY week_day, period');
+    sendResponse(res, schedules);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /schedule - 创建或更新课程表项
+router.post('/schedule', async (req, res) => {
+  try {
+    const { week_day, period, subject, teacher, room, color, remark } = req.body;
+    const db = await getDb();
+    
+    // 检查是否已存在
+    const existing = await db.get(
+      'SELECT id FROM schedule WHERE week_day = ? AND period = ?',
+      [week_day, period]
+    );
+    
+    if (existing) {
+      // 更新
+      await db.run(
+        'UPDATE schedule SET subject = ?, teacher = ?, room = ?, color = ?, remark = ? WHERE id = ?',
+        [subject, teacher, room, color, remark, existing.id]
+      );
+      sendResponse(res, { id: existing.id, updated: true });
+    } else {
+      // 创建
+      const result = await db.run(
+        'INSERT INTO schedule (week_day, period, subject, teacher, room, color, remark) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [week_day, period, subject, teacher, room, color, remark]
+      );
+      sendResponse(res, { id: result.lastID, created: true });
+    }
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /schedule/:id - 删除课程表项
+router.delete('/schedule/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    await db.run('DELETE FROM schedule WHERE id = ?', [id]);
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// ================= TASKS (临时工作区) =================
+
+// GET /tasks - 获取所有任务
+router.get('/tasks', async (req, res) => {
+  try {
+    const db = await getDb();
+    const tasks = await db.all('SELECT * FROM tasks ORDER BY created_at DESC');
+    sendResponse(res, tasks);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /tasks - 创建任务
+router.post('/tasks', async (req, res) => {
+  try {
+    const { title, description, priority, due_date } = req.body;
+    const db = await getDb();
+    const result = await db.run(
+      'INSERT INTO tasks (title, description, priority, due_date) VALUES (?, ?, ?, ?)',
+      [title, description, priority || 'normal', due_date]
+    );
+    sendResponse(res, { id: result.lastID });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /tasks/:id - 更新任务
+router.put('/tasks/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, priority, status, due_date } = req.body;
+    const db = await getDb();
+    
+    const existing = await db.get('SELECT id FROM tasks WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '任务不存在', 404);
+    
+    await db.run(
+      'UPDATE tasks SET title = ?, description = ?, priority = ?, status = ?, due_date = ? WHERE id = ?',
+      [title, description, priority, status, due_date, id]
+    );
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /tasks/:id/complete - 完成任务
+router.put('/tasks/:id/complete', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    
+    const existing = await db.get('SELECT id FROM tasks WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '任务不存在', 404);
+    
+    const completed_at = new Date().toISOString();
+    await db.run(
+      'UPDATE tasks SET status = ?, completed_at = ? WHERE id = ?',
+      ['completed', completed_at, id]
+    );
+    sendResponse(res, { id, completed_at });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /tasks/:id - 删除任务
+router.delete('/tasks/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    await db.run('DELETE FROM tasks WHERE id = ?', [id]);
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
 // ================= SETTINGS =================
 
 // GET /settings - 获取系统设置

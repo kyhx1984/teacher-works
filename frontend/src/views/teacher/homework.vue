@@ -1,6 +1,6 @@
 <template>
-  <div class="recitations-container">
-    <!-- 第一级：背书任务列表 -->
+  <div class="homework-container">
+    <!-- 第一级：作业任务列表 -->
     <el-card shadow="never" v-if="!selectedTask">
       <template #header>
         <div class="header-actions">
@@ -14,7 +14,7 @@
             />
           </div>
           <el-button type="primary" @click="openCreateTask">
-            <el-icon><Plus /></el-icon>新增背书任务
+            <el-icon><Plus /></el-icon>新增作业任务
           </el-button>
         </div>
       </template>
@@ -23,6 +23,7 @@
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="title" label="任务标题" show-overflow-tooltip />
         <el-table-column prop="subject" label="科目" width="100" />
+        <el-table-column prop="homework_date" label="作业日期" width="120" />
         <el-table-column label="完成进度" width="150">
           <template #default="scope">
             <el-progress 
@@ -32,7 +33,6 @@
           </template>
         </el-table-column>
         <el-table-column prop="remark" label="备注" width="150" show-overflow-tooltip />
-        <el-table-column prop="created_at" label="创建时间" width="180" />
         <el-table-column label="操作" width="280" fixed="right">
           <template #default="scope">
             <el-button link type="primary" size="small" @click="viewTaskDetail(scope.row)">
@@ -54,7 +54,7 @@
       </el-table>
     </el-card>
 
-    <!-- 第二级：任务详情（学生背书情况） -->
+    <!-- 第二级：任务详情（学生作业情况） -->
     <el-card shadow="never" v-else>
       <template #header>
         <div class="header-actions">
@@ -65,6 +65,7 @@
             <div class="task-detail">
               <h3>{{ selectedTask.title }}</h3>
               <el-tag>{{ selectedTask.subject }}</el-tag>
+              <span class="task-meta">日期：{{ selectedTask.homework_date }}</span>
               <span class="task-meta">完成：{{ selectedTask.completed_students }}/{{ selectedTask.total_students }}</span>
             </div>
           </div>
@@ -79,13 +80,13 @@
         </div>
       </template>
 
-      <!-- 任务内容预览（如果有图片） -->
-      <div v-if="selectedTask.image_path" class="task-preview">
-        <el-image 
-          :src="`/uploads/${selectedTask.image_path}`" 
-          :preview-src-list="previewImages"
-          fit="contain"
-          style="max-width: 100%; max-height: 400px;"
+      <!-- 任务内容预览 -->
+      <div v-if="selectedTask.content" class="task-content">
+        <el-alert
+          :title="selectedTask.content"
+          type="info"
+          :closable="false"
+          show-icon
         />
       </div>
 
@@ -96,6 +97,11 @@
             <el-tag :type="scope.row.status === 1 ? 'success' : 'danger'">
               {{ scope.row.status === 1 ? '已完成' : '未完成' }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="score" label="成绩" width="100">
+          <template #default="scope">
+            {{ scope.row.score || '-' }}
           </template>
         </el-table-column>
         <el-table-column prop="completed_at" label="完成时间" width="180">
@@ -125,7 +131,7 @@
               撤销完成
             </el-button>
             <el-button link type="primary" size="small" @click="openEditRecord(scope.row)">
-              编辑备注
+              编辑
             </el-button>
             <el-popconfirm title="确定删除该记录吗？" @confirm="handleDeleteRecord(scope.row.id)">
               <template #reference>
@@ -138,46 +144,38 @@
     </el-card>
 
     <!-- 创建/编辑任务对话框 -->
-    <el-dialog v-model="taskDialogVisible" :title="editingTask ? '编辑背书任务' : '新增背书任务'" width="600px">
+    <el-dialog v-model="taskDialogVisible" :title="editingTask ? '编辑作业任务' : '新增作业任务'" width="600px">
       <el-form ref="taskFormRef" :model="taskForm" :rules="taskRules" label-width="100px">
         <el-form-item label="任务标题" prop="title">
-          <el-input v-model="taskForm.title" placeholder="例如：第三单元古诗背诵" />
+          <el-input v-model="taskForm.title" placeholder="例如：第三单元练习题" />
         </el-form-item>
         <el-form-item label="科目" prop="subject">
           <el-input v-model="taskForm.subject" placeholder="例如：语文" />
         </el-form-item>
-        <el-form-item label="任务内容">
+        <el-form-item label="作业日期" prop="homework_date">
+          <el-date-picker
+            v-model="taskForm.homework_date"
+            type="date"
+            placeholder="选择日期"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="作业内容">
           <el-input 
             v-model="taskForm.content" 
             type="textarea" 
             :rows="3"
-            placeholder="可选，描述背诵要求等"
+            placeholder="可选，描述作业要求等"
           />
-        </el-form-item>
-        <el-form-item label="参考图片">
-          <el-upload
-            ref="uploadRef"
-            :auto-upload="false"
-            :limit="1"
-            accept="image/*"
-            :on-change="onImageChange"
-            :on-remove="onImageRemove"
-            :file-list="imageFileList"
-          >
-            <el-button type="primary" plain>
-              <el-icon><Upload /></el-icon>选择图片
-            </el-button>
-            <template #tip>
-              <div class="el-upload__tip">支持上传一张参考图片（如古诗内容）</div>
-            </template>
-          </el-upload>
         </el-form-item>
         <el-form-item label="备注">
           <el-input 
             v-model="taskForm.remark" 
             type="textarea" 
             :rows="2"
-            placeholder="可选，如：背诵要求、截止时间等"
+            placeholder="可选，如：截止时间、特殊要求等"
           />
         </el-form-item>
       </el-form>
@@ -219,18 +217,27 @@
       </template>
     </el-dialog>
 
-    <!-- 编辑备注对话框 -->
-    <el-dialog v-model="editRecordDialogVisible" title="编辑备注" width="500px">
+    <!-- 编辑记录对话框 -->
+    <el-dialog v-model="editRecordDialogVisible" title="编辑作业记录" width="500px">
       <el-form label-width="100px">
         <el-form-item label="学生">
           <el-input :value="editingRecord?.student_name" disabled />
+        </el-form-item>
+        <el-form-item label="成绩">
+          <el-input-number 
+            v-model="editingRecordScore" 
+            :min="0" 
+            :max="100" 
+            :precision="1"
+            style="width: 100%"
+          />
         </el-form-item>
         <el-form-item label="备注">
           <el-input 
             v-model="editingRecordRemark" 
             type="textarea" 
             :rows="3"
-            placeholder="可选，如：背诵质量、特殊情况等"
+            placeholder="可选，如：作业质量、完成情况等"
           />
         </el-form-item>
       </el-form>
@@ -248,15 +255,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  getRecitationTasks,
-  createRecitationTask,
-  updateRecitationTask,
-  deleteRecitationTask,
-  getRecitationRecords,
-  createRecitationRecords,
-  updateRecitationRecord,
-  deleteRecitationRecord,
-  exportRecitationTask,
+  getHomeworkTasks,
+  createHomeworkTask,
+  updateHomeworkTask,
+  deleteHomeworkTask,
+  getHomeworkRecords,
+  createHomeworkRecords,
+  updateHomeworkRecord,
+  deleteHomeworkRecord,
+  exportHomeworkTask,
   getStudents
 } from '../../api'
 
@@ -269,20 +276,19 @@ const filteredTasks = ref([])
 const taskDialogVisible = ref(false)
 const editingTask = ref(null)
 const taskFormRef = ref()
-const uploadRef = ref()
-const imageFile = ref(null)
-const imageFileList = ref([])
 
 const taskForm = ref({
   title: '',
   subject: '语文',
   content: '',
+  homework_date: '',
   remark: ''
 })
 
 const taskRules = {
   title: [{ required: true, message: '请输入任务标题', trigger: 'blur' }],
-  subject: [{ required: true, message: '请输入科目', trigger: 'blur' }]
+  subject: [{ required: true, message: '请输入科目', trigger: 'blur' }],
+  homework_date: [{ required: true, message: '请选择作业日期', trigger: 'change' }]
 }
 
 // 第二级：任务详情
@@ -296,12 +302,8 @@ const selectedStudentIds = ref([])
 const editRecordDialogVisible = ref(false)
 const savingRecord = ref(false)
 const editingRecord = ref(null)
+const editingRecordScore = ref(null)
 const editingRecordRemark = ref('')
-
-// 预览图片
-const previewImages = computed(() => {
-  return selectedTask.value?.image_path ? [`/uploads/${selectedTask.value.image_path}`] : []
-})
 
 // 计算进度百分比
 const getProgress = (task) => {
@@ -332,7 +334,7 @@ const filterTasks = () => {
 const loadTasks = async () => {
   loading.value = true
   try {
-    allTasks.value = await getRecitationTasks()
+    allTasks.value = await getHomeworkTasks()
     filterTasks()
   } catch (e) {
     // 拦截器已提示
@@ -344,10 +346,7 @@ const loadTasks = async () => {
 // 打开创建任务对话框
 const openCreateTask = () => {
   editingTask.value = null
-  taskForm.value = { title: '', subject: '语文', content: '', remark: '' }
-  imageFile.value = null
-  imageFileList.value = []
-  if (uploadRef.value) uploadRef.value.clearFiles()
+  taskForm.value = { title: '', subject: '语文', content: '', homework_date: '', remark: '' }
   taskDialogVisible.value = true
 }
 
@@ -358,22 +357,10 @@ const openEditTask = (task) => {
     title: task.title,
     subject: task.subject,
     content: task.content || '',
+    homework_date: task.homework_date || '',
     remark: task.remark || ''
   }
-  imageFile.value = null
-  imageFileList.value = task.image_path ? [{ name: 'image', url: `/uploads/${task.image_path}` }] : []
   taskDialogVisible.value = true
-}
-
-// 图片选择
-const onImageChange = (file) => {
-  imageFile.value = file.raw
-}
-
-// 图片移除
-const onImageRemove = () => {
-  imageFile.value = null
-  imageFileList.value = []
 }
 
 // 保存任务
@@ -386,20 +373,11 @@ const handleSaveTask = async () => {
   }
   saving.value = true
   try {
-    const formData = new FormData()
-    formData.append('title', taskForm.value.title)
-    formData.append('subject', taskForm.value.subject)
-    formData.append('content', taskForm.value.content)
-    formData.append('remark', taskForm.value.remark)
-    if (imageFile.value) {
-      formData.append('image', imageFile.value)
-    }
-
     if (editingTask.value) {
-      await updateRecitationTask(editingTask.value.id, formData)
+      await updateHomeworkTask(editingTask.value.id, taskForm.value)
       ElMessage.success('更新成功')
     } else {
-      await createRecitationTask(formData)
+      await createHomeworkTask(taskForm.value)
       ElMessage.success('创建成功')
     }
     taskDialogVisible.value = false
@@ -414,7 +392,7 @@ const handleSaveTask = async () => {
 // 删除任务
 const handleDeleteTask = async (id) => {
   try {
-    await deleteRecitationTask(id)
+    await deleteHomeworkTask(id)
     ElMessage.success('删除成功')
     loadTasks()
   } catch (e) {
@@ -428,7 +406,7 @@ const viewTaskDetail = async (task) => {
   recordsLoading.value = true
   try {
     const [records, studentRows] = await Promise.all([
-      getRecitationRecords(task.id),
+      getHomeworkRecords(task.id),
       getStudents()
     ])
     taskRecords.value = records
@@ -466,7 +444,7 @@ const handleAddStudents = async () => {
   }
   addingStudents.value = true
   try {
-    await createRecitationRecords(selectedTask.value.id, {
+    await createHomeworkRecords(selectedTask.value.id, {
       student_ids: selectedStudentIds.value
     })
     ElMessage.success(`已添加 ${selectedStudentIds.value.length} 名学生`)
@@ -483,7 +461,11 @@ const handleAddStudents = async () => {
 const toggleRecordStatus = async (record) => {
   const next = record.status === 1 ? 0 : 1
   try {
-    await updateRecitationRecord(record.id, { status: next, remark: record.remark })
+    await updateHomeworkRecord(record.id, { 
+      status: next, 
+      score: record.score,
+      remark: record.remark 
+    })
     record.status = next
     if (next === 1) {
       record.completed_at = new Date().toISOString()
@@ -504,21 +486,24 @@ const toggleRecordStatus = async (record) => {
   }
 }
 
-// 打开编辑备注对话框
+// 打开编辑记录对话框
 const openEditRecord = (record) => {
   editingRecord.value = record
+  editingRecordScore.value = record.score
   editingRecordRemark.value = record.remark || ''
   editRecordDialogVisible.value = true
 }
 
-// 保存备注
+// 保存记录
 const handleSaveRecord = async () => {
   savingRecord.value = true
   try {
-    await updateRecitationRecord(editingRecord.value.id, {
+    await updateHomeworkRecord(editingRecord.value.id, {
       status: editingRecord.value.status,
+      score: editingRecordScore.value,
       remark: editingRecordRemark.value
     })
+    editingRecord.value.score = editingRecordScore.value
     editingRecord.value.remark = editingRecordRemark.value
     ElMessage.success('更新成功')
     editRecordDialogVisible.value = false
@@ -532,7 +517,7 @@ const handleSaveRecord = async () => {
 // 删除记录
 const handleDeleteRecord = async (id) => {
   try {
-    await deleteRecitationRecord(id)
+    await deleteHomeworkRecord(id)
     ElMessage.success('删除成功')
     viewTaskDetail(selectedTask.value)
   } catch (e) {
@@ -543,11 +528,11 @@ const handleDeleteRecord = async (id) => {
 // 导出任务
 const exportTask = async (taskId) => {
   try {
-    const blob = await exportRecitationTask(taskId)
+    const blob = await exportHomeworkTask(taskId)
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `背书任务_${taskId}.xlsx`
+    link.download = `作业任务_${taskId}.xlsx`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -593,11 +578,7 @@ onMounted(loadTasks)
   display: flex;
   gap: 10px;
 }
-.task-preview {
+.task-content {
   margin-bottom: 20px;
-  padding: 20px;
-  background: #f5f7fa;
-  border-radius: 4px;
-  text-align: center;
 }
 </style>

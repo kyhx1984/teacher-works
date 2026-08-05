@@ -29,11 +29,45 @@ export const exportExamTemplate = (examId) => request.get(`/exam-records/templat
 export const exportExamData = (examId) => request.get(`/exam-records/export?exam_id=${examId}`, { responseType: 'blob' })
 export const importExamRecords = (formData) => request.post('/exam-records/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
-// ================= 背书管理 =================
+// ================= 背书管理（旧版，保留兼容） =================
 export const getRecitations = () => request.get('/recitations')
 export const createRecitation = (data) => request.post('/recitations', data)
 export const updateRecitation = (id, data) => request.put(`/recitations/${id}`, data)
 export const deleteRecitation = (id) => request.delete(`/recitations/${id}`)
+
+// ================= 背书任务管理（新版分级结构） =================
+export const getRecitationTasks = () => request.get('/recitation-tasks')
+export const createRecitationTask = (formData) => request.post('/recitation-tasks', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const updateRecitationTask = (id, formData) => request.put(`/recitation-tasks/${id}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const deleteRecitationTask = (id) => request.delete(`/recitation-tasks/${id}`)
+export const getRecitationRecords = (taskId) => request.get(`/recitation-tasks/${taskId}/records`)
+export const createRecitationRecords = (taskId, data) => request.post(`/recitation-tasks/${taskId}/records`, data)
+export const updateRecitationRecord = (id, data) => request.put(`/recitation-records/${id}`, data)
+export const deleteRecitationRecord = (id) => request.delete(`/recitation-records/${id}`)
+export const exportRecitationTask = (taskId) => request.get(`/recitation-tasks/${taskId}/export`, { responseType: 'blob' })
+
+// ================= 作业管理 =================
+export const getHomeworkTasks = () => request.get('/homework-tasks')
+export const createHomeworkTask = (data) => request.post('/homework-tasks', data)
+export const updateHomeworkTask = (id, data) => request.put(`/homework-tasks/${id}`, data)
+export const deleteHomeworkTask = (id) => request.delete(`/homework-tasks/${id}`)
+export const getHomeworkRecords = (taskId) => request.get(`/homework-tasks/${taskId}/records`)
+export const createHomeworkRecords = (taskId, data) => request.post(`/homework-tasks/${taskId}/records`, data)
+export const updateHomeworkRecord = (id, data) => request.put(`/homework-records/${id}`, data)
+export const deleteHomeworkRecord = (id) => request.delete(`/homework-records/${id}`)
+export const exportHomeworkTask = (taskId) => request.get(`/homework-tasks/${taskId}/export`, { responseType: 'blob' })
+
+// ================= 课程表 =================
+export const getSchedule = (week) => request.get(`/schedule${week ? `?week=${week}` : ''}`)
+export const saveSchedule = (data) => request.post('/schedule', data)
+export const deleteSchedule = (id) => request.delete(`/schedule/${id}`)
+
+// ================= 临时工作区 =================
+export const getTasks = () => request.get('/tasks')
+export const createTask = (data) => request.post('/tasks', data)
+export const updateTask = (id, data) => request.put(`/tasks/${id}`, data)
+export const deleteTask = (id) => request.delete(`/tasks/${id}`)
+export const completeTask = (id) => request.put(`/tasks/${id}/complete`)
 
 // ================= 学生档案 =================
 export const getStudents = () => request.get('/students')
