@@ -78,27 +78,7 @@
       </div>
     </el-card>
 
-    <!-- 第三行：数据可视化图表 -->
-    <el-row :gutter="20" class="mt-20">
-      <el-col :span="12">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header-title">近期请假趋势</div>
-          </template>
-          <div ref="leaveChartRef" style="width: 100%; height: 300px;"></div>
-        </el-card>
-      </el-col>
-      <el-col :span="12">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header-title">学生成绩分布</div>
-          </template>
-          <div ref="scoreChartRef" style="width: 100%; height: 300px;"></div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- 第四行：快捷入口（左）+ 待办任务提醒（右）-->
+    <!-- 第三行：快捷入口（左）+ 待办任务提醒（右）-->
     <el-row :gutter="20" class="mt-20">
       <el-col :span="8">
         <el-card shadow="hover" class="quick-card">
@@ -155,6 +135,26 @@
             </el-table-column>
           </el-table>
           <el-empty v-else description="暂无待办任务" :image-size="80" />
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <!-- 第四行：数据可视化图表 -->
+    <el-row :gutter="20" class="mt-20">
+      <el-col :span="12">
+        <el-card shadow="hover">
+          <template #header>
+            <div class="card-header-title">近期请假趋势</div>
+          </template>
+          <div ref="leaveChartRef" style="width: 100%; height: 300px;"></div>
+        </el-card>
+      </el-col>
+      <el-col :span="12">
+        <el-card shadow="hover">
+          <template #header>
+            <div class="card-header-title">学生成绩分布</div>
+          </template>
+          <div ref="scoreChartRef" style="width: 100%; height: 300px;"></div>
         </el-card>
       </el-col>
     </el-row>
