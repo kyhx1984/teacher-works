@@ -1,26 +1,7 @@
 <template>
   <div class="dashboard-container">
+    <!-- 第一行：4个核心业务卡片（需要教师重点关注的动态信息） -->
     <el-row :gutter="20">
-      <el-col :span="6">
-        <el-card shadow="hover" class="data-card">
-          <div class="card-header">
-            <span>资源总数</span>
-            <el-icon class="icon-blue"><Files /></el-icon>
-          </div>
-          <div class="card-value">{{ stats.resources }}</div>
-          <div class="card-footer">教师上传的教学资源</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="data-card">
-          <div class="card-header">
-            <span>试卷数量</span>
-            <el-icon class="icon-green"><Document /></el-icon>
-          </div>
-          <div class="card-value">{{ stats.exams }}</div>
-          <div class="card-footer">累计录入的试卷</div>
-        </el-card>
-      </el-col>
       <el-col :span="6">
         <el-card shadow="hover" class="data-card">
           <div class="card-header">
@@ -34,24 +15,11 @@
       <el-col :span="6">
         <el-card shadow="hover" class="data-card">
           <div class="card-header">
-            <span>家校沟通</span>
-            <el-icon class="icon-purple"><ChatDotRound /></el-icon>
+            <span>待交作业</span>
+            <el-icon class="icon-teal"><EditPen /></el-icon>
           </div>
-          <div class="card-value">{{ stats.communications }}</div>
-          <div class="card-footer">累计沟通 {{ stats.communications }} 次</div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-row :gutter="20" class="mt-20">
-      <el-col :span="6">
-        <el-card shadow="hover" class="data-card">
-          <div class="card-header">
-            <span>学生人数</span>
-            <el-icon class="icon-teal"><User /></el-icon>
-          </div>
-          <div class="card-value">{{ stats.students }}</div>
-          <div class="card-footer">班级在册学生</div>
+          <div class="card-value">{{ stats.homework_pending }}</div>
+          <div class="card-footer">尚未完成的作业记录</div>
         </el-card>
       </el-col>
       <el-col :span="6">
@@ -67,74 +35,50 @@
       <el-col :span="6">
         <el-card shadow="hover" class="data-card">
           <div class="card-header">
-            <span>班级总积分</span>
-            <el-icon class="icon-gold"><Trophy /></el-icon>
+            <span>家校沟通</span>
+            <el-icon class="icon-purple"><ChatDotRound /></el-icon>
           </div>
-          <div class="card-value">{{ stats.total_points }}</div>
-          <div class="card-footer">累计发放积分</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="data-card">
-          <div class="card-header">
-            <span>快捷入口</span>
-            <el-icon class="icon-green"><Odometer /></el-icon>
-          </div>
-          <div class="quick-links">
-            <el-button type="primary" size="small" plain @click="$router.push('/teacher/resources')">上传资源</el-button>
-            <el-button type="success" size="small" plain @click="$router.push('/advisor/students')">学生档案</el-button>
-            <el-button type="warning" size="small" plain @click="$router.push('/advisor/leaves')">请假管理</el-button>
-            <el-button type="info" size="small" plain @click="$router.push('/advisor/communications')">家校沟通</el-button>
-          </div>
+          <div class="card-value">{{ stats.communications }}</div>
+          <div class="card-footer">累计沟通 {{ stats.communications }} 次</div>
         </el-card>
       </el-col>
     </el-row>
 
-    <!-- 新增功能统计：作业与背书任务 -->
-    <el-row :gutter="20" class="mt-20">
-      <el-col :span="6">
-        <el-card shadow="hover" class="data-card">
-          <div class="card-header">
-            <span>作业任务</span>
-            <el-icon class="icon-teal"><EditPen /></el-icon>
-          </div>
-          <div class="card-value">{{ stats.homework_total }}</div>
-          <div class="card-footer">作业记录总数</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="data-card">
-          <div class="card-header">
-            <span>待交作业</span>
-            <el-icon class="icon-orange"><EditPen /></el-icon>
-          </div>
-          <div class="card-value">{{ stats.homework_pending }}</div>
-          <div class="card-footer">尚未完成的作业记录</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="data-card">
-          <div class="card-header">
-            <span>背书任务</span>
-            <el-icon class="icon-purple"><Reading /></el-icon>
-          </div>
-          <div class="card-value">{{ stats.recitation_tasks }}</div>
-          <div class="card-footer">已发布背书任务数</div>
-        </el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover" class="data-card">
-          <div class="card-header">
-            <span>背书已完成</span>
-            <el-icon class="icon-green"><Reading /></el-icon>
-          </div>
-          <div class="card-value">{{ stats.recitation_completed }}</div>
-          <div class="card-footer">累计完成背书记录</div>
-        </el-card>
-      </el-col>
-    </el-row>
+    <!-- 第二行：数据概览（紧凑横向展示其他纯数量统计） -->
+    <el-card shadow="hover" class="overview-card mt-20">
+      <div class="overview-grid">
+        <div class="overview-item">
+          <div class="overview-label"><el-icon class="icon-blue"><Files /></el-icon>资源总数</div>
+          <div class="overview-value">{{ stats.resources }}</div>
+        </div>
+        <div class="overview-item">
+          <div class="overview-label"><el-icon class="icon-green"><Document /></el-icon>试卷数量</div>
+          <div class="overview-value">{{ stats.exams }}</div>
+        </div>
+        <div class="overview-item">
+          <div class="overview-label"><el-icon class="icon-teal"><User /></el-icon>学生人数</div>
+          <div class="overview-value">{{ stats.students }}</div>
+        </div>
+        <div class="overview-item">
+          <div class="overview-label"><el-icon class="icon-gold"><Trophy /></el-icon>班级总积分</div>
+          <div class="overview-value">{{ stats.total_points }}</div>
+        </div>
+        <div class="overview-item">
+          <div class="overview-label"><el-icon class="icon-teal"><EditPen /></el-icon>作业记录</div>
+          <div class="overview-value">{{ stats.homework_total }}</div>
+        </div>
+        <div class="overview-item">
+          <div class="overview-label"><el-icon class="icon-purple"><Reading /></el-icon>背书任务</div>
+          <div class="overview-value">{{ stats.recitation_tasks }}</div>
+        </div>
+        <div class="overview-item">
+          <div class="overview-label"><el-icon class="icon-green"><Reading /></el-icon>背书已完成</div>
+          <div class="overview-value">{{ stats.recitation_completed }}</div>
+        </div>
+      </div>
+    </el-card>
 
-    <!-- 数据可视化图表 -->
+    <!-- 第三行：数据可视化图表 -->
     <el-row :gutter="20" class="mt-20">
       <el-col :span="12">
         <el-card shadow="hover">
@@ -154,8 +98,34 @@
       </el-col>
     </el-row>
 
+    <!-- 第四行：快捷入口（左）+ 待办任务提醒（右）-->
     <el-row :gutter="20" class="mt-20">
-      <el-col :span="24">
+      <el-col :span="8">
+        <el-card shadow="hover" class="quick-card">
+          <template #header>
+            <div class="card-header-title with-action">
+              <span>快捷入口</span>
+              <el-button link type="primary" size="small" @click="openQuickManage">
+                <el-icon><Setting /></el-icon>管理
+              </el-button>
+            </div>
+          </template>
+          <div class="quick-links-grid" v-if="quickEntries.length">
+            <el-button
+              v-for="item in quickEntries"
+              :key="item.path"
+              :type="item.color"
+              size="small"
+              plain
+              @click="router.push(item.path)"
+            >
+              {{ item.name }}
+            </el-button>
+          </div>
+          <el-empty v-else description="点击「管理」添加快捷入口" :image-size="60" />
+        </el-card>
+      </el-col>
+      <el-col :span="16">
         <el-card shadow="hover">
           <template #header>
             <div class="card-header-title">待办任务提醒</div>
@@ -178,7 +148,7 @@
             </el-table-column>
             <el-table-column label="操作" width="100">
               <template #default="scope">
-                <el-button link type="primary" @click="$router.push('/teacher/tasks')">
+                <el-button link type="primary" @click="router.push('/teacher/tasks')">
                   查看
                 </el-button>
               </template>
@@ -189,6 +159,7 @@
       </el-col>
     </el-row>
 
+    <!-- 第五行：最近班级动态 -->
     <el-row :gutter="20" class="mt-20">
       <el-col :span="24">
         <el-card shadow="hover">
@@ -212,13 +183,55 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- 快捷入口管理对话框 -->
+    <el-dialog v-model="quickManageVisible" title="管理快捷入口" width="560px">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+        title="勾选需要显示在快捷入口的页面，取消勾选则移除"
+      />
+      <el-checkbox-group v-model="tempSelectedPaths">
+        <div class="quick-manage-group">
+          <div class="quick-manage-title">教师工作</div>
+          <el-checkbox
+            v-for="item in teacherPages"
+            :key="item.path"
+            :label="item.path"
+            class="quick-checkbox"
+          >
+            {{ item.name }}
+          </el-checkbox>
+        </div>
+        <div class="quick-manage-group">
+          <div class="quick-manage-title">班主任工作</div>
+          <el-checkbox
+            v-for="item in advisorPages"
+            :key="item.path"
+            :label="item.path"
+            class="quick-checkbox"
+          >
+            {{ item.name }}
+          </el-checkbox>
+        </div>
+      </el-checkbox-group>
+      <template #footer>
+        <el-button @click="quickManageVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveQuickEntries">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import { getStats, getLeaves, getScores, getTasks } from '../../api'
+
+const router = useRouter()
 
 const stats = ref({
   resources: 0,
@@ -237,6 +250,85 @@ const stats = ref({
 })
 const activities = ref([])
 const pendingTasks = ref([])
+
+// ================= 快捷入口自定义 =================
+// 所有可选页面（教师工作）
+const teacherPages = [
+  { path: '/teacher/resources', name: '资源管理', color: 'primary' },
+  { path: '/teacher/exams', name: '试卷管理', color: 'primary' },
+  { path: '/teacher/recitations', name: '背书情况', color: 'success' },
+  { path: '/teacher/homework', name: '作业管理', color: 'success' },
+  { path: '/teacher/schedule', name: '我的课程表', color: 'warning' },
+  { path: '/teacher/tasks', name: '临时工作区', color: 'info' }
+]
+// 所有可选页面（班主任工作）
+const advisorPages = [
+  { path: '/advisor/students', name: '学生档案', color: 'success' },
+  { path: '/advisor/scores', name: '成绩分析', color: 'primary' },
+  { path: '/advisor/points', name: '积分管理', color: 'warning' },
+  { path: '/advisor/leaves', name: '请假管理', color: 'warning' },
+  { path: '/advisor/evaluations', name: '期末评价', color: 'info' },
+  { path: '/advisor/communications', name: '家校沟通', color: 'info' },
+  { path: '/advisor/seats', name: '座位表', color: 'info' }
+]
+const allPages = [...teacherPages, ...advisorPages]
+
+// localStorage 存储键
+const QUICK_STORAGE_KEY = 'dashboard_quick_entries'
+// 默认快捷入口（首次使用时）
+const DEFAULT_QUICK_PATHS = [
+  '/teacher/resources',
+  '/advisor/students',
+  '/advisor/leaves',
+  '/advisor/communications'
+]
+
+// 当前显示的快捷入口（已排序、带名称和颜色）
+const quickEntries = ref([])
+// 管理对话框
+const quickManageVisible = ref(false)
+// 管理对话框中临时勾选的路径列表
+const tempSelectedPaths = ref([])
+
+// 从 localStorage 加载快捷入口配置
+const loadQuickEntries = () => {
+  let paths = DEFAULT_QUICK_PATHS
+  try {
+    const saved = localStorage.getItem(QUICK_STORAGE_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed)) paths = parsed
+    }
+  } catch (e) {
+    // 解析失败，使用默认值
+  }
+  // 根据 allPages 过滤并保留顺序
+  quickEntries.value = paths
+    .map(p => allPages.find(page => page.path === p))
+    .filter(Boolean)
+}
+
+// 打开管理对话框：用当前已选路径初始化临时勾选
+const openQuickManage = () => {
+  tempSelectedPaths.value = quickEntries.value.map(item => item.path)
+  quickManageVisible.value = true
+}
+
+// 保存快捷入口配置到 localStorage 并刷新显示
+const saveQuickEntries = () => {
+  try {
+    localStorage.setItem(QUICK_STORAGE_KEY, JSON.stringify(tempSelectedPaths.value))
+  } catch (e) {
+    // 存储失败，忽略
+  }
+  // 按教师工作→班主任工作的固定顺序展示勾选项
+  const ordered = [
+    ...teacherPages.filter(p => tempSelectedPaths.value.includes(p.path)),
+    ...advisorPages.filter(p => tempSelectedPaths.value.includes(p.path))
+  ]
+  quickEntries.value = ordered
+  quickManageVisible.value = false
+}
 
 // 图表相关
 const leaveChartRef = ref(null)
@@ -355,6 +447,8 @@ const loadPendingTasks = async () => {
 }
 
 onMounted(async () => {
+  // 加载快捷入口配置（从 localStorage）
+  loadQuickEntries()
   try {
     const data = await getStats()
     stats.value = { ...stats.value, ...data.stats }
@@ -432,16 +526,79 @@ onBeforeUnmount(() => {
   font-size: 16px;
 }
 
-.quick-links {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 10px;
+.card-header-title.with-action {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
-.quick-links .el-button {
+/* 数据概览紧凑卡片 */
+.overview-card {
+  padding: 4px 8px;
+}
+.overview-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.overview-item {
+  flex: 1;
+  min-width: 130px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 8px;
+  border-right: 1px solid #f0f0f0;
+}
+.overview-item:last-child {
+  border-right: none;
+}
+.overview-label {
+  font-size: 12px;
+  color: #909399;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.overview-label .el-icon {
+  font-size: 14px;
+}
+.overview-value {
+  font-size: 22px;
+  font-weight: bold;
+  color: #303133;
+  margin-top: 4px;
+}
+
+/* 快捷入口卡片 */
+.quick-card {
+  height: 100%;
+}
+.quick-links-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-content: flex-start;
+}
+.quick-links-grid .el-button {
   margin-left: 0;
-  width: 100%;
+}
+
+/* 快捷入口管理对话框 */
+.quick-manage-group {
+  margin-bottom: 16px;
+}
+.quick-manage-title {
+  font-weight: bold;
+  font-size: 14px;
+  color: #303133;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.quick-checkbox {
+  margin-bottom: 8px;
+  width: 140px;
 }
 
 h4 {
