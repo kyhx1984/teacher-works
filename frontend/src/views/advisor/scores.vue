@@ -1,5 +1,16 @@
 <template>
   <div class="scores-container">
+    <!-- 与试卷管理的关联提示 -->
+    <el-alert
+      :type="analyzedExams.length ? 'success' : 'warning'"
+      :closable="false"
+      show-icon
+      class="mb-16"
+      :title="analyzedExams.length
+        ? `当前有 ${analyzedExams.length} 场试卷已加入分析：${analyzedExams.join('、')}`
+        : '暂无试卷加入分析，请在「试卷管理」中点击「加入分析」标记要分析的考试'"
+    />
+
     <!-- 筛选条件 -->
     <el-card shadow="never" class="mb-16">
       <template #header>
@@ -248,7 +259,8 @@ import {
   deleteScore,
   batchDeleteScores,
   exportScores,
-  getStudents
+  getStudents,
+  getExams
 } from '../../api'
 
 const loading = ref(false)
@@ -264,6 +276,9 @@ const students = ref([])
 const analysisSummary = ref([])
 const importFile = ref(null)
 
+// 已加入分析的试卷标题（来自试卷管理，analyze=1）
+const analyzedExams = ref([])
+
 // 筛选表单
 const filterForm = ref({
   exam_name: '',
@@ -276,8 +291,13 @@ const trendChartRef = ref(null)
 let trendChartInstance = null
 
 // 获取所有考试名称（去重）
+// 优先展示已加入分析的试卷；若均已加入但暂无成绩数据，则回退展示全部考试名称
 const examNames = computed(() => {
   const names = new Set(scores.value.map(s => s.exam_name).filter(Boolean))
+  if (analyzedExams.value.length) {
+    const analyzedWithData = analyzedExams.value.filter(n => names.has(n))
+    if (analyzedWithData.length) return Array.from(analyzedWithData).sort()
+  }
   return Array.from(names).sort()
 })
 
@@ -521,9 +541,10 @@ const onImportChange = (file) => {
 const loadData = async () => {
   loading.value = true
   try {
-    const [scoreRows, studentRows] = await Promise.all([getScores(), getStudents()])
+    const [scoreRows, studentRows, examRows] = await Promise.all([getScores(), getStudents(), getExams()])
     scores.value = scoreRows
     students.value = studentRows
+    analyzedExams.value = (examRows || []).filter(e => e.analyze === 1).map(e => e.title)
     buildAnalysis(scoreRows)
     // 数据加载完成后重置分页并渲染图表
     currentPage.value = 1

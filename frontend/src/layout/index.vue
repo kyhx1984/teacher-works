@@ -101,6 +101,10 @@
           >
             <el-icon><Top /></el-icon>设置年级
           </el-button>
+          <span class="current-date">
+            <el-icon><Calendar /></el-icon>
+            <span>{{ currentDateText }}</span>
+          </span>
         </div>
         <div class="header-right">
           <el-avatar :size="32" src="https://cube.elemecdn.com/3/7c/3ea6beec64369c2642b92c6726f1epng.png" />
@@ -192,6 +196,14 @@ const pageTitle = computed(() => route.meta.title || '工作台')
 const teacherName = ref('陈老师')
 const showEditDialog = ref(false)
 const editForm = ref({ teacherName: '' })
+
+// 当前日期与星期（每分钟自动刷新，跨天时保持准确）
+const currentDateText = ref('')
+const updateCurrentDate = () => {
+  const now = new Date()
+  const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+  currentDateText.value = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${weekdays[now.getDay()]}`
+}
 
 // 年级信息（通过动态计算接口获取）
 const gradeInfo = ref({ level: '', year: '' })
@@ -351,6 +363,8 @@ const handleLogout = () => {
 
 onMounted(() => {
   loadTeacherInfo()
+  updateCurrentDate()
+  setInterval(updateCurrentDate, 60000)
 })
 </script>
 
@@ -417,6 +431,18 @@ onMounted(() => {
 .username {
   font-size: 14px;
   color: #606266;
+}
+
+.current-date {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #606266;
+  background: #f5f7fa;
+  border-radius: 4px;
+  padding: 3px 10px;
+  white-space: nowrap;
 }
 
 .main-content {

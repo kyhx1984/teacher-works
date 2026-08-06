@@ -120,6 +120,26 @@
           </template>
         </el-table-column>
         <el-table-column prop="remark" label="备注" show-overflow-tooltip />
+        <el-table-column label="图片" width="170">
+          <template #default="scope">
+            <div class="record-images" v-if="getRecordImages(scope.row).length">
+              <div class="record-image-item" v-for="(img, imgIndex) in getRecordImages(scope.row)" :key="img">
+                <el-image
+                  class="record-thumb"
+                  :src="`/uploads/${img}`"
+                  :preview-src-list="getRecordImages(scope.row).map(i => `/uploads/${i}`)"
+                  :initial-index="imgIndex"
+                  fit="cover"
+                  preview-teleported
+                />
+                <a class="record-download" :href="`/uploads/${img}`" :download="img" target="_blank" title="下载图片">
+                  <el-icon><Download /></el-icon>
+                </a>
+              </div>
+            </div>
+            <span v-else class="text-muted">无</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="scope">
             <el-button
@@ -252,7 +272,7 @@
     </el-dialog>
 
     <!-- 编辑记录对话框 -->
-    <el-dialog v-model="editRecordDialogVisible" title="编辑作业记录" width="500px">
+    <el-dialog v-model="editRecordDialogVisible" title="编辑作业记录" width="560px">
       <el-form label-width="100px">
         <el-form-item label="学生">
           <el-input :value="editingRecord?.student_name" disabled />
@@ -273,6 +293,40 @@
             :rows="3"
             placeholder="可选，如：作业质量、完成情况等"
           />
+        </el-form-item>
+        <el-form-item label="图片">
+          <div class="existing-images" v-if="recordImages.length">
+            <div class="existing-image" v-for="(img, imgIndex) in recordImages" :key="img">
+              <el-image
+                class="record-thumb"
+                :src="`/uploads/${img}`"
+                :preview-src-list="recordImages.map(i => `/uploads/${i}`)"
+                :initial-index="imgIndex"
+                fit="cover"
+                preview-teleported
+              />
+              <a class="record-download" :href="`/uploads/${img}`" :download="img" target="_blank" title="下载图片">
+                <el-icon><Download /></el-icon>
+              </a>
+              <el-icon class="record-remove" title="删除图片" @click="removeRecordImage(img)"><CircleClose /></el-icon>
+            </div>
+          </div>
+          <el-upload
+            ref="recordUploadRef"
+            :auto-upload="false"
+            :limit="6"
+            accept="image/*"
+            multiple
+            :on-change="onRecordImageChange"
+            :on-remove="onRecordImageRemove"
+          >
+            <el-button type="primary" plain size="small">
+              <el-icon><Upload /></el-icon>上传图片
+            </el-button>
+            <template #tip>
+              <div class="el-upload__tip">支持上传作业照片等，可多选，点击缩略图可放大，右上角图标可下载</div>
+            </template>
+          </el-upload>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -341,6 +395,34 @@ const savingRecord = ref(false)
 const editingRecord = ref(null)
 const editingRecordScore = ref(null)
 const editingRecordRemark = ref('')
+
+// 记录图片相关：recordImages 为已有图片，removedRecordImages 为待删除的已有图片，newRecordImageFiles 为新选择文件
+const recordUploadRef = ref()
+const recordImages = ref([])
+const removedRecordImages = ref([])
+const newRecordImageFiles = ref([])
+
+// 将逗号分隔的 image_path 拆分为图片路径列表
+const getRecordImages = (row) => {
+  if (!row || !row.image_path) return []
+  return row.image_path.split(',').filter(Boolean)
+}
+
+// 新图片选择
+const onRecordImageChange = (file) => {
+  newRecordImageFiles.value.push(file.raw)
+}
+
+// 新图片移除
+const onRecordImageRemove = (file) => {
+  newRecordImageFiles.value = newRecordImageFiles.value.filter(f => f !== file.raw)
+}
+
+// 删除已有图片（标记为待删除，保存时生效）
+const removeRecordImage = (img) => {
+  recordImages.value = recordImages.value.filter(i => i !== img)
+  removedRecordImages.value.push(img)
+}
 
 // 预览图片列表
 const previewImages = computed(() => {
@@ -566,6 +648,10 @@ const openEditRecord = (record) => {
   editingRecord.value = record
   editingRecordScore.value = record.score
   editingRecordRemark.value = record.remark || ''
+  recordImages.value = getRecordImages(record)
+  removedRecordImages.value = []
+  newRecordImageFiles.value = []
+  if (recordUploadRef.value) recordUploadRef.value.clearFiles()
   editRecordDialogVisible.value = true
 }
 
@@ -573,11 +659,27 @@ const openEditRecord = (record) => {
 const handleSaveRecord = async () => {
   savingRecord.value = true
   try {
-    await updateHomeworkRecord(editingRecord.value.id, {
-      status: editingRecord.value.status,
-      score: editingRecordScore.value,
-      remark: editingRecordRemark.value
-    })
+    // 有图片变更时使用 FormData 提交，否则保持原有 JSON 提交
+    const hasImageChanges = newRecordImageFiles.value.length > 0 || removedRecordImages.value.length > 0
+    if (hasImageChanges) {
+      const fd = new FormData()
+      fd.append('status', editingRecord.value.status)
+      if (editingRecordScore.value !== null && editingRecordScore.value !== undefined) {
+        fd.append('score', editingRecordScore.value)
+      }
+      fd.append('remark', editingRecordRemark.value || '')
+      if (removedRecordImages.value.length) {
+        fd.append('remove_images', removedRecordImages.value.join(','))
+      }
+      newRecordImageFiles.value.forEach(f => fd.append('images', f))
+      await updateHomeworkRecord(editingRecord.value.id, fd)
+    } else {
+      await updateHomeworkRecord(editingRecord.value.id, {
+        status: editingRecord.value.status,
+        score: editingRecordScore.value,
+        remark: editingRecordRemark.value
+      })
+    }
     editingRecord.value.score = editingRecordScore.value
     editingRecord.value.remark = editingRecordRemark.value
     ElMessage.success('更新成功')
@@ -662,5 +764,56 @@ onMounted(loadTasks)
   background: #f5f7fa;
   border-radius: 4px;
   text-align: center;
+}
+/* 记录图片缩略图 */
+.record-images {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.record-image-item,
+.existing-image {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+.record-thumb {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  border: 1px solid #ebeef5;
+  cursor: pointer;
+}
+.record-download {
+  position: absolute;
+  right: -4px;
+  top: -4px;
+  width: 18px;
+  height: 18px;
+  background: #409eff;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+.record-remove {
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 18px;
+  height: 18px;
+  background: #f56c6c;
+  color: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.existing-images {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 </style>

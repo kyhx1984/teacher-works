@@ -157,15 +157,15 @@ router.get('/exams', async (req, res) => {
   }
 });
 
-// POST /exams - 新增试卷（支持关联资源和备注）
+// POST /exams - 新增试卷（支持关联资源、备注和加入分析标记）
 router.post('/exams', async (req, res) => {
   try {
-    const { title, type, content, resource_id, remark } = req.body;
+    const { title, type, content, resource_id, remark, analyze } = req.body;
     const db = await getDb();
     const contentStr = typeof content === 'object' ? JSON.stringify(content) : content;
     const result = await db.run(
-      'INSERT INTO exams (title, type, content, resource_id, remark) VALUES (?, ?, ?, ?, ?)',
-      [title, type, contentStr, resource_id || null, remark || null]
+      'INSERT INTO exams (title, type, content, resource_id, remark, analyze) VALUES (?, ?, ?, ?, ?, ?)',
+      [title, type, contentStr, resource_id || null, remark || null, analyze ? 1 : 0]
     );
     sendResponse(res, { id: result.lastID });
   } catch (err) {
@@ -177,14 +177,14 @@ router.post('/exams', async (req, res) => {
 router.put('/exams/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, type, content, resource_id, remark } = req.body;
+    const { title, type, content, resource_id, remark, analyze } = req.body;
     const db = await getDb();
     const existing = await db.get('SELECT id FROM exams WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '试卷不存在', 404);
     const contentStr = typeof content === 'object' ? JSON.stringify(content) : content;
     await db.run(
-      'UPDATE exams SET title=?, type=?, content=?, resource_id=?, remark=? WHERE id=?',
-      [title, type, contentStr, resource_id || null, remark || null, id]
+      'UPDATE exams SET title=?, type=?, content=?, resource_id=?, remark=?, analyze=? WHERE id=?',
+      [title, type, contentStr, resource_id || null, remark || null, analyze ? 1 : 0, id]
     );
     sendResponse(res, { id });
   } catch (err) {
@@ -268,18 +268,37 @@ router.post('/exam-records', async (req, res) => {
   }
 });
 
-// PUT /exam-records/:id - 更新单条考试记录
-router.put('/exam-records/:id', async (req, res) => {
+// PUT /exam-records/:id - 更新单条考试记录（支持图片上传，image_path 逗号分隔）
+router.put('/exam-records/:id', upload.array('images', 6), async (req, res) => {
   try {
     const { id } = req.params;
-    const { score, comment, remark } = req.body;
+    const { score, comment, remark, remove_images } = req.body;
     const db = await getDb();
-    const existing = await db.get('SELECT id FROM exam_records WHERE id = ?', [id]);
+    const existing = await db.get('SELECT id, image_path FROM exam_records WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '记录不存在', 404);
-    
+
+    let image_path = existing.image_path || null;
+    // 新增图片：追加到已有图片之后，逗号分隔
+    if (req.files && req.files.length > 0) {
+      const newImages = req.files.map(f => f.filename);
+      image_path = image_path ? image_path + ',' + newImages.join(',') : newImages.join(',');
+    }
+    // 删除图片：移除指定文件名并删除磁盘文件
+    if (remove_images) {
+      const removed = Array.isArray(remove_images) ? remove_images : String(remove_images).split(',');
+      removed.forEach(file => {
+        const filePath = path.join(__dirname, '..', 'uploads', file.trim());
+        if (fs.existsSync(filePath)) {
+          try { fs.unlinkSync(filePath); } catch (e) { /* 忽略删除失败 */ }
+        }
+      });
+      const keepList = (image_path || '').split(',').filter(f => f && !removed.includes(f.trim()));
+      image_path = keepList.length ? keepList.join(',') : null;
+    }
+
     await db.run(
-      'UPDATE exam_records SET score=?, comment=?, remark=? WHERE id=?',
-      [score !== undefined ? score : null, comment || null, remark || null, id]
+      'UPDATE exam_records SET score=?, comment=?, remark=?, image_path=? WHERE id=?',
+      [score !== undefined ? score : null, comment || null, remark || null, image_path, id]
     );
     sendResponse(res, { id });
   } catch (err) {
@@ -915,20 +934,39 @@ router.post('/homework-tasks/:id/records', async (req, res) => {
   }
 });
 
-// PUT /homework-records/:id - 更新作业记录状态
-router.put('/homework-records/:id', async (req, res) => {
+// PUT /homework-records/:id - 更新作业记录状态（支持图片上传，image_path 逗号分隔）
+router.put('/homework-records/:id', upload.array('images', 6), async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, score, remark } = req.body;
+    const { status, score, remark, remove_images } = req.body;
     const db = await getDb();
     
-    const existing = await db.get('SELECT id FROM homework_records WHERE id = ?', [id]);
+    const existing = await db.get('SELECT id, image_path FROM homework_records WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '记录不存在', 404);
-    
+
+    let image_path = existing.image_path || null;
+    // 新增图片：追加到已有图片之后，逗号分隔
+    if (req.files && req.files.length > 0) {
+      const newImages = req.files.map(f => f.filename);
+      image_path = image_path ? image_path + ',' + newImages.join(',') : newImages.join(',');
+    }
+    // 删除图片：移除指定文件名并删除磁盘文件
+    if (remove_images) {
+      const removed = Array.isArray(remove_images) ? remove_images : String(remove_images).split(',');
+      removed.forEach(file => {
+        const filePath = path.join(__dirname, '..', 'uploads', file.trim());
+        if (fs.existsSync(filePath)) {
+          try { fs.unlinkSync(filePath); } catch (e) { /* 忽略删除失败 */ }
+        }
+      });
+      const keepList = (image_path || '').split(',').filter(f => f && !removed.includes(f.trim()));
+      image_path = keepList.length ? keepList.join(',') : null;
+    }
+
     const completed_at = status === 1 ? new Date().toISOString() : null;
     await db.run(
-      'UPDATE homework_records SET status = ?, score = ?, remark = ?, completed_at = ? WHERE id = ?',
-      [status === 1 ? 1 : 0, score, remark, completed_at, id]
+      'UPDATE homework_records SET status = ?, score = ?, remark = ?, completed_at = ?, image_path = ? WHERE id = ?',
+      [status === 1 ? 1 : 0, score, remark, completed_at, image_path, id]
     );
     sendResponse(res, { id });
   } catch (err) {

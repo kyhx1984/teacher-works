@@ -3,7 +3,14 @@
     <el-card shadow="never">
       <template #header>
         <div class="header-actions">
-          <span class="header-title">班级课程表</span>
+          <div class="header-left">
+            <span class="header-title">班级课程表</span>
+            <div class="remark-note" :title="scheduleRemark || '点击添加备注提醒'" @click="openRemarkDialog">
+              <el-icon><Memo /></el-icon>
+              <span class="remark-text">{{ scheduleRemark || '添加备注提醒' }}</span>
+              <el-icon class="remark-edit"><EditPen /></el-icon>
+            </div>
+          </div>
           <div class="action-buttons">
             <span class="ctrl-label">上午节数：</span>
             <el-input-number
@@ -38,8 +45,14 @@
           <!-- 表头 -->
           <div class="grid-header">
             <div class="time-column">时间</div>
-            <div class="day-column" v-for="(day, index) in weekDays" :key="index">
+            <div
+              class="day-column"
+              v-for="(day, index) in weekDays"
+              :key="index"
+              :class="{ 'today-column': index === todayIndex }"
+            >
               {{ day }}
+              <span v-if="index === todayIndex" class="today-badge">今天</span>
             </div>
           </div>
 
@@ -55,6 +68,7 @@
                 class="day-column"
                 v-for="(day, dayIndex) in weekDays"
                 :key="dayIndex"
+                :class="{ 'today-column': dayIndex === todayIndex }"
                 @click="openEdit(dayIndex, period)"
               >
                 <div
@@ -88,6 +102,7 @@
                 class="day-column noon-column"
                 v-for="(day, dayIndex) in weekDays"
                 :key="'noon-' + dayIndex"
+                :class="{ 'today-column': dayIndex === todayIndex }"
                 @click="openNoonEdit(dayIndex)"
               >
                 <div v-if="getNoonRemark(dayIndex)" class="noon-remark-display">
@@ -112,6 +127,7 @@
                 class="day-column"
                 v-for="(day, dayIndex) in weekDays"
                 :key="dayIndex"
+                :class="{ 'today-column': dayIndex === todayIndex }"
                 @click="openEdit(dayIndex, morningPeriods + period)"
               >
                 <div
@@ -136,8 +152,24 @@
       </div>
     </el-card>
 
+    <!-- 备注提醒对话框 -->
+    <el-dialog v-model="remarkDialogVisible" title="备注提醒" width="450px">
+      <el-input
+        v-model="scheduleRemarkInput"
+        type="textarea"
+        :rows="3"
+        placeholder="例如：本周六补课（国庆调休），周五课程调整到周六"
+      />
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="remarkDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="remarkSaving" @click="handleSaveRemark">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
     <!-- 编辑课程对话框 -->
-    <el-dialog v-model="dialogVisible" :title="editingItem.id ? '编辑课程' : '添加课程'" width="500px">
+    <el-dialog v-model="dialogVisible" :title="editingItem.id ? '编辑课程' : '添加课程'" width="500px">>
       <el-form ref="formRef" :model="editingItem" :rules="rules" label-width="80px">
         <el-form-item label="星期">
           <el-tag>{{ weekDays[editingItem.week_day] }}</el-tag>
@@ -249,7 +281,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getSchedule, saveSchedule, deleteSchedule, getScheduleTimeSlots, saveScheduleTimeSlots } from '../../api'
+import { getSchedule, saveSchedule, deleteSchedule, getScheduleTimeSlots, saveScheduleTimeSlots, getSettings, updateSetting } from '../../api'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -258,6 +290,52 @@ const scheduleData = ref([])
 const formRef = ref()
 
 const weekDays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+
+// 当前星期在 weekDays 中的下标（0=周一 ... 6=周日），用于高亮今天的列
+const todayIndex = ref(-1)
+const initToday = () => {
+  const day = new Date().getDay()
+  todayIndex.value = day === 0 ? 6 : day - 1
+}
+
+// 备注提醒（存储在 settings 表的 schedule_remark 键中）
+const scheduleRemark = ref('')
+const remarkDialogVisible = ref(false)
+const scheduleRemarkInput = ref('')
+const remarkSaving = ref(false)
+
+// 加载备注提醒
+const loadRemark = async () => {
+  try {
+    const res = await getSettings()
+    if (res && res.schedule_remark) {
+      scheduleRemark.value = res.schedule_remark
+    }
+  } catch (e) {
+    // 拦截器已提示
+  }
+}
+
+// 打开备注提醒对话框
+const openRemarkDialog = () => {
+  scheduleRemarkInput.value = scheduleRemark.value
+  remarkDialogVisible.value = true
+}
+
+// 保存备注提醒
+const handleSaveRemark = async () => {
+  remarkSaving.value = true
+  try {
+    await updateSetting('schedule_remark', scheduleRemarkInput.value.trim())
+    scheduleRemark.value = scheduleRemarkInput.value.trim()
+    ElMessage.success('备注提醒已保存')
+    remarkDialogVisible.value = false
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    remarkSaving.value = false
+  }
+}
 
 // 节数设置
 const morningPeriods = ref(4)
@@ -466,7 +544,11 @@ const onPeriodsChange = () => {
   // 节数变化不需要特殊处理，只是视图变化
 }
 
-onMounted(loadData)
+onMounted(() => {
+  initToday()
+  loadData()
+  loadRemark()
+})
 </script>
 
 <style scoped>
@@ -476,9 +558,42 @@ onMounted(loadData)
   justify-content: space-between;
   align-items: center;
 }
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
 .header-title {
   font-weight: bold;
   font-size: 15px;
+}
+/* 备注提醒样式 */
+.remark-note {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #e6a23c;
+  background: #fdf6ec;
+  border: 1px dashed #e6a23c;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  max-width: 320px;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+.remark-note:hover {
+  background: #faecd8;
+}
+.remark-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remark-edit {
+  flex-shrink: 0;
 }
 .action-buttons {
   display: flex;
@@ -502,6 +617,31 @@ onMounted(loadData)
   border-radius: 7px 7px 0 0;
   font-weight: bold;
   font-size: 13px;
+}
+/* 今天的列高亮 */
+.today-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: #fff;
+  background: #ffb84d;
+  border-radius: 8px;
+  font-weight: normal;
+  vertical-align: middle;
+}
+.grid-header .today-column {
+  background: #fff7e6;
+  color: #e6a23c;
+}
+.period-row .day-column.today-column {
+  background: #fffbf2;
+}
+.noon-column.today-column {
+  background: #fffbf2;
+}
+.today-column .schedule-item {
+  box-shadow: inset 0 0 0 2px rgba(230, 162, 60, 0.4);
 }
 .time-column {
   width: 85px;

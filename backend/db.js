@@ -36,6 +36,7 @@ async function initDb() {
       type TEXT,
       content TEXT,
       resource_id INTEGER,
+      analyze INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (resource_id) REFERENCES resources(id)
     );
@@ -48,6 +49,7 @@ async function initDb() {
       score REAL,
       comment TEXT,
       remark TEXT,
+      image_path TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (exam_id) REFERENCES exams(id),
       FOREIGN KEY (student_id) REFERENCES students(id)
@@ -105,6 +107,7 @@ async function initDb() {
       status INTEGER DEFAULT 0,
       score REAL,
       remark TEXT,
+      image_path TEXT,
       completed_at DATETIME,
       FOREIGN KEY (task_id) REFERENCES homework_tasks(id),
       FOREIGN KEY (student_id) REFERENCES students(id)
@@ -120,7 +123,9 @@ async function initDb() {
       family_info TEXT,
       address TEXT,
       is_special INTEGER DEFAULT 0,
-      special_type TEXT
+      special_type TEXT,
+      remark TEXT,
+      avatar TEXT
     );
 
     CREATE TABLE IF NOT EXISTS scores (
@@ -262,6 +267,29 @@ async function initDb() {
   try {
     await db.run('ALTER TABLE homework_tasks ADD COLUMN image_path TEXT');
   } catch (e) { /* image_path 列已存在，忽略 */ }
+
+  // 为已存在的 exams 表追加 analyze 列（是否加入成绩分析）
+  try {
+    await db.run('ALTER TABLE exams ADD COLUMN analyze INTEGER DEFAULT 0');
+  } catch (e) { /* analyze 列已存在，忽略 */ }
+
+  // 为已存在的 exam_records 表追加 image_path 列（考试记录图片，逗号分隔）
+  try {
+    await db.run('ALTER TABLE exam_records ADD COLUMN image_path TEXT');
+  } catch (e) { /* image_path 列已存在，忽略 */ }
+
+  // 为已存在的 homework_records 表追加 image_path 列（作业记录图片，逗号分隔）
+  try {
+    await db.run('ALTER TABLE homework_records ADD COLUMN image_path TEXT');
+  } catch (e) { /* image_path 列已存在，忽略 */ }
+
+  // 为已存在的 students 表追加 remark 和 avatar 列（备注和头像）
+  try {
+    await db.run('ALTER TABLE students ADD COLUMN remark TEXT');
+  } catch (e) { /* remark 列已存在，忽略 */ }
+  try {
+    await db.run('ALTER TABLE students ADD COLUMN avatar TEXT');
+  } catch (e) { /* avatar 列已存在，忽略 */ }
 
   // 为已存在的 schedule 表追加 time_slot 和 noon_remark 列（时间段和午间备注）
   try {

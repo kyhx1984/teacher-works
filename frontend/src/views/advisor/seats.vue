@@ -40,6 +40,11 @@
         <div class="podium">
           <span>讲 台</span>
         </div>
+        <div class="gender-legend">
+          <span class="legend-item"><span class="legend-dot male"></span>男</span>
+          <span class="legend-item"><span class="legend-dot female"></span>女</span>
+          <span class="legend-item"><span class="legend-dot empty"></span>空位</span>
+        </div>
         <div class="hint" v-if="selected">
           已选择「{{ selectedName }}」，请点击另一个座位进行交换（再次点击当前座位可取消）
         </div>
@@ -50,7 +55,7 @@
               v-for="(seat, j) in row"
               :key="j"
               class="seat"
-              :class="{ empty: !seat, selected: isSelected(i, j) }"
+              :class="{ empty: !seat, selected: isSelected(i, j), female: seat && seat.gender === '女' }"
               @click="onSeatClick(i, j)"
             >
               <template v-if="seat">
@@ -273,6 +278,35 @@ onMounted(loadSeats)
   font-size: 13px;
   margin-bottom: 16px;
 }
+/* 性别图例 */
+.gender-legend {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #606266;
+}
+.legend-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid #d4e4ff;
+  background: #ecf5ff;
+}
+.legend-dot.female {
+  border-color: #f8d3ce;
+  background: #fdf0ee;
+}
+.legend-dot.empty {
+  border: 1px dashed #dcdfe6;
+  background: #fafafa;
+}
 .seat-rows {
   display: flex;
   flex-direction: column;
@@ -283,6 +317,10 @@ onMounted(loadSeats)
   display: flex;
   align-items: center;
   gap: 14px;
+}
+/* 过道效果：每两列间隔开（每组第二列后的座位增加左侧间距） */
+.seat-row .seat:nth-child(3n+1) {
+  margin-left: 28px;
 }
 .row-label {
   width: 52px;
@@ -305,10 +343,19 @@ onMounted(loadSeats)
   transition: all 0.2s;
   flex-shrink: 0;
 }
+/* 女生座位：柔和的淡粉色，与男生浅蓝色配色和谐 */
+.seat.female {
+  background: #fdf0ee;
+  border-color: #f8d3ce;
+}
 .seat:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 10px rgba(64, 158, 255, 0.25);
   background: #d9ecff;
+}
+.seat.female:hover {
+  box-shadow: 0 4px 10px rgba(245, 108, 108, 0.22);
+  background: #fbe2de;
 }
 .seat.empty {
   background: #fafafa;
@@ -318,6 +365,11 @@ onMounted(loadSeats)
   outline: 2px solid #409eff;
   background: #d9ecff;
   box-shadow: 0 4px 10px rgba(64, 158, 255, 0.35);
+}
+.seat.female.selected {
+  outline-color: #f56c6c;
+  background: #fbe2de;
+  box-shadow: 0 4px 10px rgba(245, 108, 108, 0.32);
 }
 .seat-name {
   font-weight: bold;

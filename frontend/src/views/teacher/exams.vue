@@ -44,6 +44,19 @@
             <span v-else class="text-muted">未关联</span>
           </template>
         </el-table-column>
+        <el-table-column label="加入分析" width="100" align="center">
+          <template #default="scope">
+            <el-tag
+              :type="scope.row.analyze === 1 ? 'success' : 'info'"
+              size="small"
+              style="cursor: pointer"
+              :title="scope.row.analyze === 1 ? '点击取消加入成绩分析' : '点击加入成绩分析'"
+              @click="toggleAnalyze(scope.row)"
+            >
+              {{ scope.row.analyze === 1 ? '已加入' : '未加入' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="created_at" label="创建时间" width="180" />
         <el-table-column label="操作" width="320" fixed="right">
           <template #default="scope">
@@ -116,6 +129,10 @@
             placeholder="每行一题，或直接粘贴题目文本"
           />
         </el-form-item>
+        <el-form-item label="加入分析">
+          <el-switch v-model="form.analyze" :active-value="1" :inactive-value="0" />
+          <div class="form-tip" style="margin-left: 8px">开启后可在「成绩分析」中对该考试的成绩进行分析</div>
+        </el-form-item>
         <el-form-item label="备注">
           <el-input
             type="textarea"
@@ -177,6 +194,26 @@
         </el-table-column>
         <el-table-column prop="comment" label="评语" show-overflow-tooltip />
         <el-table-column prop="remark" label="备注" show-overflow-tooltip />
+        <el-table-column label="图片" width="170">
+          <template #default="scope">
+            <div class="record-images" v-if="getRecordImages(scope.row).length">
+              <div class="record-image-item" v-for="(img, imgIndex) in getRecordImages(scope.row)" :key="img">
+                <el-image
+                  class="record-thumb"
+                  :src="`/uploads/${img}`"
+                  :preview-src-list="getRecordImages(scope.row).map(i => `/uploads/${i}`)"
+                  :initial-index="imgIndex"
+                  fit="cover"
+                  preview-teleported
+                />
+                <a class="record-download" :href="`/uploads/${img}`" :download="img" target="_blank" title="下载图片">
+                  <el-icon><Download /></el-icon>
+                </a>
+              </div>
+            </div>
+            <span v-else class="text-muted">无</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="scope">
             <el-button link type="primary" size="small" @click="editRecord(scope.row)">编辑</el-button>
@@ -186,7 +223,7 @@
     </el-dialog>
 
     <!-- 编辑考试记录对话框 -->
-    <el-dialog v-model="recordDialogVisible" title="编辑考试记录" width="500px">
+    <el-dialog v-model="recordDialogVisible" title="编辑考试记录" width="560px">
       <el-form :model="recordForm" label-width="80px">
         <el-form-item label="学生">
           <el-input :value="recordForm.student_name" disabled />
@@ -199,6 +236,40 @@
         </el-form-item>
         <el-form-item label="备注">
           <el-input type="textarea" :rows="2" v-model="recordForm.remark" placeholder="其他备注信息" />
+        </el-form-item>
+        <el-form-item label="图片">
+          <div class="existing-images" v-if="recordImages.length">
+            <div class="existing-image" v-for="(img, imgIndex) in recordImages" :key="img">
+              <el-image
+                class="record-thumb"
+                :src="`/uploads/${img}`"
+                :preview-src-list="recordImages.map(i => `/uploads/${i}`)"
+                :initial-index="imgIndex"
+                fit="cover"
+                preview-teleported
+              />
+              <a class="record-download" :href="`/uploads/${img}`" :download="img" target="_blank" title="下载图片">
+                <el-icon><Download /></el-icon>
+              </a>
+              <el-icon class="record-remove" title="删除图片" @click="removeRecordImage(img)"><CircleClose /></el-icon>
+            </div>
+          </div>
+          <el-upload
+            ref="recordUploadRef"
+            :auto-upload="false"
+            :limit="6"
+            accept="image/*"
+            multiple
+            :on-change="onRecordImageChange"
+            :on-remove="onRecordImageRemove"
+          >
+            <el-button type="primary" plain size="small">
+              <el-icon><Upload /></el-icon>上传图片
+            </el-button>
+            <template #tip>
+              <div class="el-upload__tip">支持上传答题卡、试卷照片等，可多选，点击缩略图可放大，右上角图标可下载</div>
+            </template>
+          </el-upload>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -280,6 +351,34 @@ const recordDialogVisible = ref(false)
 const recordSaving = ref(false)
 const recordForm = ref({ id: null, student_id: null, student_name: '', score: null, comment: '', remark: '' })
 
+// 记录图片相关：recordImages 为已有图片，removedRecordImages 为待删除的已有图片，newRecordImageFiles 为新选择文件
+const recordUploadRef = ref()
+const recordImages = ref([])
+const removedRecordImages = ref([])
+const newRecordImageFiles = ref([])
+
+// 将逗号分隔的 image_path 拆分为图片路径列表
+const getRecordImages = (row) => {
+  if (!row || !row.image_path) return []
+  return row.image_path.split(',').filter(Boolean)
+}
+
+// 新图片选择
+const onRecordImageChange = (file) => {
+  newRecordImageFiles.value.push(file.raw)
+}
+
+// 新图片移除
+const onRecordImageRemove = (file) => {
+  newRecordImageFiles.value = newRecordImageFiles.value.filter(f => f !== file.raw)
+}
+
+// 删除已有图片（标记为待删除，保存时生效）
+const removeRecordImage = (img) => {
+  recordImages.value = recordImages.value.filter(i => i !== img)
+  removedRecordImages.value.push(img)
+}
+
 // 导入相关
 const importVisible = ref(false)
 const importing = ref(false)
@@ -287,7 +386,7 @@ const importUploadRef = ref()
 const importFile = ref(null)
 const importExamId = ref(null)
 
-const form = ref({ id: null, title: '', type: '', content: '', resource_id: null, remark: '', resource_category: null })
+const form = ref({ id: null, title: '', type: '', content: '', resource_id: null, remark: '', resource_category: null, analyze: 0 })
 
 const getTypeTag = (type) => {
   const map = { 单元检测: 'primary', 专项练习: 'success', 期中考试: 'warning', 期末考试: 'danger' }
@@ -328,7 +427,7 @@ const preview = (row) => {
 }
 
 const openCreate = () => {
-  form.value = { id: null, title: '', type: '', content: '', resource_id: null, remark: '', resource_category: null }
+  form.value = { id: null, title: '', type: '', content: '', resource_id: null, remark: '', resource_category: null, analyze: 0 }
   resourceOptions.value = []
   // 打开对话框时加载部分资源供选择
   searchResources('')
@@ -416,7 +515,8 @@ const handleSave = async () => {
       type: form.value.type || '单元检测', 
       content: form.value.content,
       resource_id: form.value.resource_id,
-      remark: form.value.remark
+      remark: form.value.remark,
+      analyze: form.value.analyze
     }
     if (form.value.id) {
       await updateExam(form.value.id, payload)
@@ -434,6 +534,26 @@ const handleSave = async () => {
   }
 }
 
+// 切换试卷是否加入成绩分析
+const toggleAnalyze = async (row) => {
+  const next = row.analyze === 1 ? 0 : 1
+  try {
+    await updateExam(row.id, {
+      title: row.title,
+      type: row.type,
+      content: row.content,
+      resource_id: row.resource_id,
+      remark: row.remark,
+      analyze: next
+    })
+    row.analyze = next
+    ElMessage.success(next === 1 ? '已加入成绩分析' : '已取消加入成绩分析')
+  } catch (e) {
+    // 拦截器已提示
+  }
+}
+
+// 删除试卷
 const handleDelete = async (id) => {
   try {
     await deleteExam(id)
@@ -486,17 +606,37 @@ const editRecord = (record) => {
     comment: record.comment || '',
     remark: record.remark || ''
   }
+  recordImages.value = getRecordImages(record)
+  removedRecordImages.value = []
+  newRecordImageFiles.value = []
+  if (recordUploadRef.value) recordUploadRef.value.clearFiles()
   recordDialogVisible.value = true
 }
 
 const handleSaveRecord = async () => {
   recordSaving.value = true
   try {
-    await updateExamRecord(recordForm.value.id, {
-      score: recordForm.value.score,
-      comment: recordForm.value.comment,
-      remark: recordForm.value.remark
-    })
+    // 有图片变更时使用 FormData 提交，否则保持原有 JSON 提交
+    const hasImageChanges = newRecordImageFiles.value.length > 0 || removedRecordImages.value.length > 0
+    if (hasImageChanges) {
+      const fd = new FormData()
+      if (recordForm.value.score !== null && recordForm.value.score !== undefined) {
+        fd.append('score', recordForm.value.score)
+      }
+      fd.append('comment', recordForm.value.comment || '')
+      fd.append('remark', recordForm.value.remark || '')
+      if (removedRecordImages.value.length) {
+        fd.append('remove_images', removedRecordImages.value.join(','))
+      }
+      newRecordImageFiles.value.forEach(f => fd.append('images', f))
+      await updateExamRecord(recordForm.value.id, fd)
+    } else {
+      await updateExamRecord(recordForm.value.id, {
+        score: recordForm.value.score,
+        comment: recordForm.value.comment,
+        remark: recordForm.value.remark
+      })
+    }
     ElMessage.success('保存成功')
     recordDialogVisible.value = false
     // 刷新记录列表
@@ -599,5 +739,56 @@ onMounted(() => {
   word-break: break-word;
   font-family: inherit;
   line-height: 1.8;
+}
+/* 记录图片缩略图 */
+.record-images {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.record-image-item,
+.existing-image {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+.record-thumb {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  border: 1px solid #ebeef5;
+  cursor: pointer;
+}
+.record-download {
+  position: absolute;
+  right: -4px;
+  top: -4px;
+  width: 18px;
+  height: 18px;
+  background: #409eff;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+.record-remove {
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 18px;
+  height: 18px;
+  background: #f56c6c;
+  color: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.existing-images {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
 </style>

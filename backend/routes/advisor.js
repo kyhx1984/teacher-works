@@ -82,17 +82,17 @@ router.post('/students/import', upload.single('file'), async (req, res) => {
   }
 });
 
-// POST /students - 新增学生
+// POST /students - 新增学生（支持备注 remark）
 router.post('/students', async (req, res) => {
   try {
-    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type } = req.body;
+    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark } = req.body;
     if (!name) return sendResponse(res, null, '学生姓名不能为空', 400);
     const db = await getDb();
     const result = await db.run(
-      `INSERT INTO students (name, gender, birth, parent_name, phone, family_info, address, is_special, special_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO students (name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [name, gender || '', birth || '', parent_name || '', phone || '', family_info || '', address || '',
-       is_special ? 1 : 0, special_type || '']
+       is_special ? 1 : 0, special_type || '', remark || null]
     );
     sendResponse(res, { id: result.lastID });
   } catch (err) {
@@ -100,20 +100,42 @@ router.post('/students', async (req, res) => {
   }
 });
 
-// PUT /students/:id - 更新学生
+// PUT /students/:id - 更新学生（支持备注 remark）
 router.put('/students/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type } = req.body;
+    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark } = req.body;
     const db = await getDb();
     const existing = await db.get('SELECT id FROM students WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '学生不存在', 404);
     await db.run(
-      `UPDATE students SET name=?, gender=?, birth=?, parent_name=?, phone=?, family_info=?, address=?, is_special=?, special_type=? WHERE id=?`,
+      `UPDATE students SET name=?, gender=?, birth=?, parent_name=?, phone=?, family_info=?, address=?, is_special=?, special_type=?, remark=? WHERE id=?`,
       [name, gender || '', birth || '', parent_name || '', phone || '', family_info || '', address || '',
-       is_special ? 1 : 0, special_type || '', id]
+       is_special ? 1 : 0, special_type || '', remark || null, id]
     );
     sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /students/:id/avatar - 上传学生头像（保存到 uploads/ 目录，更新 avatar 字段）
+router.post('/students/:id/avatar', leaveImageUpload.single('avatar'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!req.file) return sendResponse(res, null, '未上传头像文件', 400);
+    const db = await getDb();
+    const existing = await db.get('SELECT id, avatar FROM students WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '学生不存在', 404);
+    // 删除旧头像文件
+    if (existing.avatar) {
+      const oldPath = path.join(__dirname, '..', 'uploads', existing.avatar);
+      if (fs.existsSync(oldPath)) {
+        try { fs.unlinkSync(oldPath); } catch (e) { /* 忽略删除失败 */ }
+      }
+    }
+    await db.run('UPDATE students SET avatar = ? WHERE id = ?', [req.file.filename, id]);
+    sendResponse(res, { avatar: req.file.filename });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -422,7 +444,7 @@ router.get('/seats', async (req, res) => {
       try { savedLayout = JSON.parse(layoutValue); } catch (e) { savedLayout = null; }
     }
 
-    const students = await db.all('SELECT id, name FROM students ORDER BY id ASC');
+    const students = await db.all('SELECT id, name, gender FROM students ORDER BY id ASC');
 
     // 将扁平布局（[{student_id,row,col}]）构建为二维 rows 网格
     // 确保至少展示 targetRows 行，即使部分行为空
@@ -439,7 +461,7 @@ router.get('/seats', async (req, res) => {
       entries.forEach((e) => {
         if (e.row >= 0 && e.row < rows.length && e.col >= 0 && e.col < columns) {
           const stu = students.find((s) => s.id === e.student_id);
-          rows[e.row][e.col] = stu ? { student_id: stu.id, name: stu.name } : null;
+          rows[e.row][e.col] = stu ? { student_id: stu.id, name: stu.name, gender: stu.gender } : null;
         }
       });
       return rows;

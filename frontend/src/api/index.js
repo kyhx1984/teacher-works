@@ -86,6 +86,9 @@ export const deleteStudent = (id) => request.delete(`/students/${id}`)
 export const batchDeleteStudents = (ids) => request.delete('/students/batch', { data: { ids } })
 export const importStudents = (formData) =>
   request.post('/students/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+// 学生头像上传（先保存学生基本信息，再上传头像）
+export const uploadStudentAvatar = (id, formData) =>
+  request.post(`/students/${id}/avatar`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
 // ================= 成绩管理 =================
 export const getScores = () => request.get('/scores')

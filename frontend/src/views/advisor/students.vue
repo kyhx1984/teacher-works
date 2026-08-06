@@ -39,6 +39,13 @@
       <el-table :data="pagedData" style="width: 100%" v-loading="loading" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="55" />
         <el-table-column prop="id" label="学号" width="80" />
+        <el-table-column label="头像" width="70" align="center">
+          <template #default="scope">
+            <el-avatar :size="36" :src="scope.row.avatar ? `/uploads/${scope.row.avatar}` : undefined">
+              {{ scope.row.name ? scope.row.name.slice(0, 1) : '' }}
+            </el-avatar>
+          </template>
+        </el-table-column>
         <el-table-column prop="name" label="姓名" width="100" />
         <el-table-column prop="gender" label="性别" width="70" />
         <el-table-column prop="grade" label="年级" width="100" />
@@ -54,6 +61,7 @@
             <el-tag v-else type="info">否</el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="remark" label="备注" width="160" show-overflow-tooltip />
         <el-table-column label="操作" width="170" fixed="right">
           <template #default="scope">
             <el-button link type="primary" size="small" @click="viewDetail(scope.row)">详情</el-button>
@@ -79,6 +87,30 @@
 
     <el-dialog v-model="dialogVisible" :title="form.id ? '编辑学生' : '新增学生'" width="640px">
       <el-form ref="formRef" :model="form" :rules="studentRules" label-width="100px">
+        <el-form-item label="头像">
+          <div class="avatar-upload">
+            <el-avatar
+              v-if="avatarPreview"
+              :size="64"
+              :src="avatarPreview"
+              class="avatar-preview"
+            >{{ form.name ? form.name.slice(0, 1) : '' }}</el-avatar>
+            <el-upload
+              ref="avatarUploadRef"
+              :auto-upload="false"
+              :limit="1"
+              accept="image/*"
+              :show-file-list="false"
+              :on-change="onAvatarChange"
+              :on-remove="onAvatarRemove"
+            >
+              <el-button type="primary" plain>
+                <el-icon><Upload /></el-icon>选择头像
+              </el-button>
+            </el-upload>
+          </div>
+          <div class="form-tip" v-if="avatarFile">已选择新头像，保存后生效</div>
+        </el-form-item>
         <el-form-item label="姓名" prop="name" required>
           <el-input v-model="form.name" placeholder="请输入姓名" />
         </el-form-item>
@@ -121,6 +153,14 @@
         <el-form-item label="情况说明" v-if="form.is_special === 1">
           <el-input v-model="form.special_type" placeholder="如单亲/孤儿等" />
         </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="form.remark"
+            type="textarea"
+            :rows="2"
+            placeholder="可选，如：性格特点、关注事项等"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -161,6 +201,11 @@
     </el-dialog>
 
     <el-dialog v-model="detailVisible" title="学生档案详情" width="640px">
+      <div class="detail-header" v-if="detail">
+        <el-avatar :size="64" :src="detail.avatar ? `/uploads/${detail.avatar}` : undefined">
+          {{ detail.name ? detail.name.slice(0, 1) : '' }}
+        </el-avatar>
+      </div>
       <el-descriptions :column="2" border v-if="detail">
         <el-descriptions-item label="学号">{{ detail.id }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ detail.name }}</el-descriptions-item>
@@ -174,6 +219,7 @@
         </el-descriptions-item>
         <el-descriptions-item label="家庭情况" :span="2">{{ detail.family_info || '—' }}</el-descriptions-item>
         <el-descriptions-item label="家庭住址" :span="2">{{ detail.address || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="备注" :span="2">{{ detail.remark || '—' }}</el-descriptions-item>
       </el-descriptions>
     </el-dialog>
   </div>
@@ -189,7 +235,8 @@ import {
   deleteStudent,
   batchDeleteStudents,
   importStudents,
-  exportStudents
+  exportStudents,
+  uploadStudentAvatar
 } from '../../api'
 
 const loading = ref(false)
@@ -233,7 +280,16 @@ const form = ref({
   grade: '',
   class: '',
   is_special: 0,
-  special_type: ''
+  special_type: '',
+  remark: ''
+})
+
+// 头像上传相关：avatarFile 为新选择的文件，avatarPreview 为预览地址
+const avatarUploadRef = ref()
+const avatarFile = ref(null)
+const avatarPreviewUrl = ref('')
+const avatarPreview = computed(() => {
+  return avatarPreviewUrl.value || (form.value.avatar ? `/uploads/${form.value.avatar}` : '')
 })
 
 // 学生表单校验规则
@@ -266,8 +322,24 @@ const resetForm = () => {
     grade: '',
     class: '',
     is_special: 0,
-    special_type: ''
+    special_type: '',
+    remark: ''
   }
+  avatarFile.value = null
+  avatarPreviewUrl.value = ''
+  if (avatarUploadRef.value) avatarUploadRef.value.clearFiles()
+}
+
+// 头像选择
+const onAvatarChange = (file) => {
+  avatarFile.value = file.raw
+  avatarPreviewUrl.value = URL.createObjectURL(file.raw)
+}
+
+// 头像移除
+const onAvatarRemove = () => {
+  avatarFile.value = null
+  avatarPreviewUrl.value = ''
 }
 
 const openCreate = () => {
@@ -280,6 +352,9 @@ const openCreate = () => {
 
 const openEdit = (row) => {
   form.value = { ...row }
+  avatarFile.value = null
+  avatarPreviewUrl.value = ''
+  if (avatarUploadRef.value) avatarUploadRef.value.clearFiles()
   dialogVisible.value = true
   nextTick(() => {
     formRef.value?.clearValidate()
@@ -316,9 +391,20 @@ const handleSave = async () => {
     const payload = { ...form.value }
     if (payload.id) {
       await updateStudent(payload.id, payload)
+      // 有新的头像文件时，保存信息后再上传头像
+      if (avatarFile.value) {
+        const fd = new FormData()
+        fd.append('avatar', avatarFile.value)
+        await uploadStudentAvatar(payload.id, fd)
+      }
       ElMessage.success('更新成功')
     } else {
-      await createStudent(payload)
+      const res = await createStudent(payload)
+      if (avatarFile.value) {
+        const fd = new FormData()
+        fd.append('avatar', avatarFile.value)
+        await uploadStudentAvatar(res.id, fd)
+      }
       ElMessage.success('新增成功')
     }
     dialogVisible.value = false
@@ -424,5 +510,22 @@ onMounted(loadStudents)
 .action-buttons {
   display: flex;
   gap: 10px;
+}
+.avatar-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.avatar-preview {
+  flex-shrink: 0;
+}
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+.detail-header {
+  text-align: center;
+  margin-bottom: 16px;
 }
 </style>
