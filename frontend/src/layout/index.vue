@@ -97,10 +97,9 @@
             type="warning"
             size="small"
             plain
-            :loading="upgrading"
-            @click="handleUpgradeGrade"
+            @click="openGradeDialog"
           >
-            <el-icon><Top /></el-icon>年级升级
+            <el-icon><Top /></el-icon>设置年级
           </el-button>
         </div>
         <div class="header-right">
@@ -151,6 +150,29 @@
         <el-button type="primary" :loading="passwordLoading" @click="savePassword">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 设置年级对话框 -->
+    <el-dialog v-model="showGradeDialog" title="设置入学年份" width="420px">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+        title="年级将根据入学年份和当前日期自动计算（每年9月升级）"
+      />
+      <el-form label-width="100px">
+        <el-form-item label="当前年级">
+          <el-tag type="warning">{{ gradeInfo.level }}</el-tag>
+        </el-form-item>
+        <el-form-item label="入学年份">
+          <el-input-number v-model="gradeYearInput" :min="2000" :max="2100" :step="1" style="width: 100%" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showGradeDialog = false">取消</el-button>
+        <el-button type="primary" :loading="gradeSaving" @click="saveGradeYear">确定</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
@@ -158,7 +180,7 @@
 import { ref, computed, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Key, SwitchButton } from '@element-plus/icons-vue'
-import { getSettings, updateSetting, upgradeGrade, changePassword } from '../api'
+import { getSettings, updateSetting, getGradeInfo, updateGradeYear, changePassword } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
@@ -171,9 +193,11 @@ const teacherName = ref('陈老师')
 const showEditDialog = ref(false)
 const editForm = ref({ teacherName: '' })
 
-// 年级信息
+// 年级信息（通过动态计算接口获取）
 const gradeInfo = ref({ level: '', year: '' })
-const upgrading = ref(false)
+const showGradeDialog = ref(false)
+const gradeYearInput = ref(2025)
+const gradeSaving = ref(false)
 
 // 加载教师信息
 // 注意：request.js 拦截器在 code===200 时已返回 res.data，所以 res 就是 settings 对象
@@ -183,36 +207,44 @@ const loadTeacherInfo = async () => {
     if (res && res.teacher_name) {
       teacherName.value = res.teacher_name
     }
-    // 读取年级信息
-    if (res && res.grade_level) {
-      gradeInfo.value.level = res.grade_level
-      gradeInfo.value.year = res.grade_year || ''
-    }
   } catch (err) {
     console.error('加载教师信息失败:', err)
   }
+  // 通过动态计算接口获取年级信息（根据入学年份和当前日期自动计算）
+  try {
+    const gradeRes = await getGradeInfo()
+    if (gradeRes) {
+      gradeInfo.value.level = gradeRes.grade_level || ''
+      gradeInfo.value.year = gradeRes.grade_year || ''
+    }
+  } catch (err) {
+    console.error('加载年级信息失败:', err)
+  }
 }
 
-// 年级升级
-const handleUpgradeGrade = async () => {
+// 打开设置年级对话框
+const openGradeDialog = () => {
+  gradeYearInput.value = parseInt(gradeInfo.value.year, 10) || 2025
+  showGradeDialog.value = true
+}
+
+// 保存入学年份
+const saveGradeYear = async () => {
+  gradeSaving.value = true
   try {
-    await ElMessageBox.confirm('确认升级到下一年级？此操作将更新年级信息。', '提示', { type: 'warning' })
-  } catch (e) {
-    // 用户取消
-    return
-  }
-  upgrading.value = true
-  try {
-    const res = await upgradeGrade()
-    if (res && res.grade_level) {
-      gradeInfo.value.level = res.grade_level
-      gradeInfo.value.year = res.grade_year || ''
+    await updateGradeYear(gradeYearInput.value)
+    // 重新获取动态计算的年级信息
+    const gradeRes = await getGradeInfo()
+    if (gradeRes) {
+      gradeInfo.value.level = gradeRes.grade_level || ''
+      gradeInfo.value.year = gradeRes.grade_year || ''
     }
-    ElMessage.success('年级升级成功')
+    ElMessage.success('年级设置成功')
+    showGradeDialog.value = false
   } catch (e) {
     // 拦截器已提示
   } finally {
-    upgrading.value = false
+    gradeSaving.value = false
   }
 }
 

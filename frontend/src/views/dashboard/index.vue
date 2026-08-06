@@ -57,11 +57,11 @@
       <el-col :span="6">
         <el-card shadow="hover" class="data-card">
           <div class="card-header">
-            <span>待背篇目</span>
+            <span>待背记录</span>
             <el-icon class="icon-blue"><Reading /></el-icon>
           </div>
           <div class="card-value">{{ stats.pending_recitations }}</div>
-          <div class="card-footer">尚未完成的背书任务</div>
+          <div class="card-footer">尚未完成的背书记录</div>
         </el-card>
       </el-col>
       <el-col :span="6">
@@ -86,6 +86,50 @@
             <el-button type="warning" size="small" plain @click="$router.push('/advisor/leaves')">请假管理</el-button>
             <el-button type="info" size="small" plain @click="$router.push('/advisor/communications')">家校沟通</el-button>
           </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <!-- 新增功能统计：作业与背书任务 -->
+    <el-row :gutter="20" class="mt-20">
+      <el-col :span="6">
+        <el-card shadow="hover" class="data-card">
+          <div class="card-header">
+            <span>作业任务</span>
+            <el-icon class="icon-teal"><EditPen /></el-icon>
+          </div>
+          <div class="card-value">{{ stats.homework_total }}</div>
+          <div class="card-footer">作业记录总数</div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover" class="data-card">
+          <div class="card-header">
+            <span>待交作业</span>
+            <el-icon class="icon-orange"><EditPen /></el-icon>
+          </div>
+          <div class="card-value">{{ stats.homework_pending }}</div>
+          <div class="card-footer">尚未完成的作业记录</div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover" class="data-card">
+          <div class="card-header">
+            <span>背书任务</span>
+            <el-icon class="icon-purple"><Reading /></el-icon>
+          </div>
+          <div class="card-value">{{ stats.recitation_tasks }}</div>
+          <div class="card-footer">已发布背书任务数</div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover" class="data-card">
+          <div class="card-header">
+            <span>背书已完成</span>
+            <el-icon class="icon-green"><Reading /></el-icon>
+          </div>
+          <div class="card-value">{{ stats.recitation_completed }}</div>
+          <div class="card-footer">累计完成背书记录</div>
         </el-card>
       </el-col>
     </el-row>
@@ -184,7 +228,12 @@ const stats = ref({
   active_leaves: 0,
   communications: 0,
   pending_recitations: 0,
-  total_points: 0
+  total_points: 0,
+  // 新增字段：作业与背书任务统计
+  homework_pending: 0,
+  homework_total: 0,
+  recitation_tasks: 0,
+  recitation_completed: 0
 })
 const activities = ref([])
 const pendingTasks = ref([])

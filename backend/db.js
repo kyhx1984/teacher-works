@@ -200,6 +200,12 @@ async function initDb() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       completed_at DATETIME
     );
+
+    -- 资源功能类别（自定义分类，如"试卷"、"作业"等）
+    CREATE TABLE IF NOT EXISTS resource_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE
+    );
   `);
 
   // 为已存在的 recitations 表追加 student_id 列（关联 students 表，向后兼容旧数据）
@@ -247,6 +253,24 @@ async function initDb() {
     await db.run('ALTER TABLE students ADD COLUMN class TEXT');
   } catch (e) { /* class 列已存在，忽略 */ }
 
+  // 为已存在的 resources 表追加 category_id 列（关联 resource_categories 表）
+  try {
+    await db.run('ALTER TABLE resources ADD COLUMN category_id INTEGER');
+  } catch (e) { /* category_id 列已存在，忽略 */ }
+
+  // 为已存在的 homework_tasks 表追加 image_path 列（作业图片）
+  try {
+    await db.run('ALTER TABLE homework_tasks ADD COLUMN image_path TEXT');
+  } catch (e) { /* image_path 列已存在，忽略 */ }
+
+  // 为已存在的 schedule 表追加 time_slot 和 noon_remark 列（时间段和午间备注）
+  try {
+    await db.run('ALTER TABLE schedule ADD COLUMN time_slot TEXT');
+  } catch (e) { /* time_slot 列已存在，忽略 */ }
+  try {
+    await db.run('ALTER TABLE schedule ADD COLUMN noon_remark TEXT');
+  } catch (e) { /* noon_remark 列已存在，忽略 */ }
+
   // 插入默认教师名称（仅首次初始化时）
   const existing = await db.get("SELECT key FROM settings WHERE key = 'teacher_name'");
   if (!existing) {
@@ -271,6 +295,15 @@ async function initDb() {
   const existingGradeLevel = await db.get("SELECT key FROM settings WHERE key = 'grade_level'");
   if (!existingGradeLevel) {
     await db.run("INSERT INTO settings (key, value) VALUES ('grade_level', '一年级')");
+  }
+
+  // 插入默认资源功能类别（仅首次初始化时）
+  const existingCategories = await db.get("SELECT COUNT(*) as c FROM resource_categories");
+  if (existingCategories && existingCategories.c === 0) {
+    const defaultCategories = ['试卷', '作业', '课件', '教案', '学案', '素材'];
+    for (const cat of defaultCategories) {
+      await db.run("INSERT INTO resource_categories (name) VALUES (?)", [cat]);
+    }
   }
 
   console.log('Database initialized and tables created/verified.');

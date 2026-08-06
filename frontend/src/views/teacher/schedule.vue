@@ -23,7 +23,10 @@
               size="small"
               @change="onPeriodsChange"
             />
-            <el-button type="primary" plain @click="handleSave">
+            <el-button type="info" plain size="small" @click="openTimeSlotDialog">
+              <el-icon><Clock /></el-icon>时间段设置
+            </el-button>
+            <el-button type="primary" plain size="small" @click="handleSave">
               <el-icon><Check /></el-icon>保存课程
             </el-button>
           </div>
@@ -39,7 +42,7 @@
               {{ day }}
             </div>
           </div>
-          
+
           <!-- 上午课程 -->
           <div class="period-section" v-if="morningPeriods > 0">
             <div class="section-label">上午</div>
@@ -48,14 +51,14 @@
                 <div class="period-name">第{{ period }}节</div>
                 <div class="period-time">{{ getTimeSlot('morning', period) }}</div>
               </div>
-              <div 
-                class="day-column" 
-                v-for="(day, dayIndex) in weekDays" 
+              <div
+                class="day-column"
+                v-for="(day, dayIndex) in weekDays"
                 :key="dayIndex"
                 @click="openEdit(dayIndex, period)"
               >
-                <div 
-                  v-if="getScheduleItem(dayIndex, period)" 
+                <div
+                  v-if="getScheduleItem(dayIndex, period)"
                   class="schedule-item"
                   :style="{ backgroundColor: getScheduleItem(dayIndex, period).color || '#409eff' }"
                 >
@@ -72,7 +75,31 @@
               </div>
             </div>
           </div>
-          
+
+          <!-- 午间行（备注） -->
+          <div class="period-section noon-section">
+            <div class="section-label noon-label">午间</div>
+            <div class="period-row noon-row">
+              <div class="time-column">
+                <div class="period-name">午休</div>
+                <div class="period-time">{{ getTimeSlot('noon', 0) }}</div>
+              </div>
+              <div
+                class="day-column noon-column"
+                v-for="(day, dayIndex) in weekDays"
+                :key="'noon-' + dayIndex"
+                @click="openNoonEdit(dayIndex)"
+              >
+                <div v-if="getNoonRemark(dayIndex)" class="noon-remark-display">
+                  {{ getNoonRemark(dayIndex) }}
+                </div>
+                <div v-else class="schedule-empty noon-empty">
+                  <el-icon><EditPen /></el-icon>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- 下午课程 -->
           <div class="period-section" v-if="afternoonPeriods > 0">
             <div class="section-label">下午</div>
@@ -81,14 +108,14 @@
                 <div class="period-name">第{{ morningPeriods + period }}节</div>
                 <div class="period-time">{{ getTimeSlot('afternoon', period) }}</div>
               </div>
-              <div 
-                class="day-column" 
-                v-for="(day, dayIndex) in weekDays" 
+              <div
+                class="day-column"
+                v-for="(day, dayIndex) in weekDays"
                 :key="dayIndex"
                 @click="openEdit(dayIndex, morningPeriods + period)"
               >
-                <div 
-                  v-if="getScheduleItem(dayIndex, morningPeriods + period)" 
+                <div
+                  v-if="getScheduleItem(dayIndex, morningPeriods + period)"
                   class="schedule-item"
                   :style="{ backgroundColor: getScheduleItem(dayIndex, morningPeriods + period).color || '#409eff' }"
                 >
@@ -151,13 +178,78 @@
         </span>
       </template>
     </el-dialog>
+
+    <!-- 午间备注对话框 -->
+    <el-dialog v-model="noonDialogVisible" title="午间备注" width="450px">
+      <el-form label-width="80px">
+        <el-form-item label="星期">
+          <el-tag>{{ weekDays[noonEditing.day] }}</el-tag>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="noonEditing.remark"
+            type="textarea"
+            :rows="3"
+            placeholder="可选，如：午间值班、午自习安排等"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="noonDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSaveNoon">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 时间段设置对话框 -->
+    <el-dialog v-model="timeSlotDialogVisible" title="时间段设置" width="600px">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+        title="修改后点击保存，课表展示时间将自动更新"
+      />
+      <el-table :data="timeSlotList" style="width: 100%" size="small">
+        <el-table-column prop="name" label="节次" width="100" />
+        <el-table-column label="开始时间" width="180">
+          <template #default="scope">
+            <el-time-select
+              v-model="scope.row.start"
+              :max-time="scope.row.end"
+              placeholder="开始"
+              start="06:00"
+              step="00:05"
+              end="22:00"
+              style="width: 100%"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label="结束时间" width="180">
+          <template #default="scope">
+            <el-time-select
+              v-model="scope.row.end"
+              :min-time="scope.row.start"
+              placeholder="结束"
+              start="06:00"
+              step="00:05"
+              end="22:00"
+              style="width: 100%"
+            />
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="timeSlotDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="timeSlotSaving" @click="handleSaveTimeSlots">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getSchedule, saveSchedule, deleteSchedule } from '../../api'
+import { getSchedule, saveSchedule, deleteSchedule, getScheduleTimeSlots, saveScheduleTimeSlots } from '../../api'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -170,6 +262,18 @@ const weekDays = ['周一', '周二', '周三', '周四', '周五', '周六', '�
 // 节数设置
 const morningPeriods = ref(4)
 const afternoonPeriods = ref(3)
+
+// 时间段配置（从后端加载）
+const timeSlots = ref([])
+
+// 午间备注数据（按星期存储，period=0 表示午间）
+const noonDialogVisible = ref(false)
+const noonEditing = ref({ day: 0, remark: '' })
+
+// 时间段设置对话框
+const timeSlotDialogVisible = ref(false)
+const timeSlotList = ref([])
+const timeSlotSaving = ref(false)
 
 // 当前编辑的课程
 const editingItem = ref({
@@ -187,15 +291,21 @@ const rules = {
   subject: [{ required: true, message: '请输入科目', trigger: 'blur' }]
 }
 
-// 获取时间段
+// 获取时间段（从加载的配置中读取）
 const getTimeSlot = (section, period) => {
+  if (!timeSlots.value.length) return ''
   if (section === 'morning') {
-    const times = ['08:00-08:45', '08:55-09:40', '10:00-10:45', '10:55-11:40', '14:00-14:45', '14:55-15:40']
-    return times[period - 1] || ''
-  } else {
-    const times = ['14:00-14:45', '14:55-15:40', '16:00-16:45', '16:55-17:40']
-    return times[period - 1] || ''
+    const item = timeSlots.value.find(t => t.period === period)
+    return item ? `${item.start}-${item.end}` : ''
+  } else if (section === 'afternoon') {
+    const afternoonPeriod = morningPeriods.value + period
+    const item = timeSlots.value.find(t => t.period === afternoonPeriod)
+    return item ? `${item.start}-${item.end}` : ''
+  } else if (section === 'noon') {
+    const item = timeSlots.value.find(t => t.period === 0)
+    return item ? `${item.start}-${item.end}` : ''
   }
+  return ''
 }
 
 // 获取指定位置的课程
@@ -203,11 +313,19 @@ const getScheduleItem = (dayIndex, period) => {
   return scheduleData.value.find(item => item.week_day === dayIndex && item.period === period)
 }
 
+// 获取午间备注
+const getNoonRemark = (dayIndex) => {
+  const item = scheduleData.value.find(item => item.week_day === dayIndex && item.period === 0)
+  return item ? item.noon_remark : ''
+}
+
 // 加载数据
 const loadData = async () => {
   loading.value = true
   try {
-    scheduleData.value = await getSchedule()
+    const [schedules, slots] = await Promise.all([getSchedule(), getScheduleTimeSlots()])
+    scheduleData.value = schedules
+    timeSlots.value = slots || []
   } catch (e) {
     // 拦截器已提示
   } finally {
@@ -235,6 +353,62 @@ const openEdit = (dayIndex, period) => {
   dialogVisible.value = true
 }
 
+// 打开午间备注对话框
+const openNoonEdit = (dayIndex) => {
+  noonEditing.value = {
+    day: dayIndex,
+    remark: getNoonRemark(dayIndex)
+  }
+  noonDialogVisible.value = true
+}
+
+// 保存午间备注
+const handleSaveNoon = async () => {
+  saving.value = true
+  try {
+    // period=0 表示午间，subject 固定为"午休"
+    await saveSchedule({
+      week_day: noonEditing.value.day,
+      period: 0,
+      subject: '午休',
+      teacher: '',
+      room: '',
+      color: '',
+      remark: '',
+      noon_remark: noonEditing.value.remark || ''
+    })
+    ElMessage.success('保存成功')
+    noonDialogVisible.value = false
+    loadData()
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    saving.value = false
+  }
+}
+
+// 打开时间段设置对话框
+const openTimeSlotDialog = () => {
+  // 深拷贝当前时间段到编辑列表
+  timeSlotList.value = timeSlots.value.map(t => ({ ...t }))
+  timeSlotDialogVisible.value = true
+}
+
+// 保存时间段设置
+const handleSaveTimeSlots = async () => {
+  timeSlotSaving.value = true
+  try {
+    await saveScheduleTimeSlots({ time_slots: timeSlotList.value })
+    timeSlots.value = [...timeSlotList.value]
+    ElMessage.success('时间段保存成功')
+    timeSlotDialogVisible.value = false
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    timeSlotSaving.value = false
+  }
+}
+
 // 保存课程
 const handleSave = async () => {
   if (!formRef.value) {
@@ -252,7 +426,7 @@ const handleSave = async () => {
     }
     return
   }
-  
+
   try {
     await formRef.value.validate()
   } catch (e) {
@@ -296,6 +470,7 @@ onMounted(loadData)
 </script>
 
 <style scoped>
+/* 整体缩小约15%：减小 padding、字号、间距 */
 .header-actions {
   display: flex;
   justify-content: space-between;
@@ -303,43 +478,44 @@ onMounted(loadData)
 }
 .header-title {
   font-weight: bold;
-  font-size: 16px;
+  font-size: 15px;
 }
 .action-buttons {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }
 .ctrl-label {
-  font-size: 13px;
+  font-size: 12px;
   color: #606266;
 }
 .schedule-board {
-  padding: 20px 0;
+  padding: 14px 0;
   overflow-x: auto;
 }
 .schedule-grid {
-  min-width: 800px;
+  min-width: 680px;
 }
 .grid-header {
   display: flex;
   background: #f5f7fa;
-  border-radius: 8px 8px 0 0;
+  border-radius: 7px 7px 0 0;
   font-weight: bold;
+  font-size: 13px;
 }
 .time-column {
-  width: 100px;
-  padding: 12px;
+  width: 85px;
+  padding: 8px;
   text-align: center;
   border-right: 1px solid #ebeef5;
   flex-shrink: 0;
 }
 .day-column {
   flex: 1;
-  padding: 12px;
+  padding: 8px;
   text-align: center;
   border-right: 1px solid #ebeef5;
-  min-width: 100px;
+  min-width: 85px;
 }
 .day-column:last-child {
   border-right: none;
@@ -349,11 +525,16 @@ onMounted(loadData)
 }
 .section-label {
   background: #ecf5ff;
-  padding: 8px 12px;
+  padding: 5px 8px;
   font-weight: bold;
+  font-size: 12px;
   color: #409eff;
   border-left: 1px solid #ebeef5;
   border-right: 1px solid #ebeef5;
+}
+.noon-label {
+  background: #fdf6ec;
+  color: #e6a23c;
 }
 .period-row {
   display: flex;
@@ -370,50 +551,50 @@ onMounted(loadData)
 }
 .period-name {
   font-weight: bold;
-  font-size: 14px;
+  font-size: 12px;
 }
 .period-time {
-  font-size: 11px;
+  font-size: 10px;
   color: #909399;
-  margin-top: 4px;
+  margin-top: 3px;
 }
 .schedule-item {
-  padding: 10px;
-  border-radius: 8px;
+  padding: 7px;
+  border-radius: 6px;
   color: #fff;
   cursor: pointer;
   transition: all 0.2s;
-  min-height: 60px;
+  min-height: 50px;
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
 .schedule-item:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
 }
 .item-subject {
   font-weight: bold;
-  font-size: 14px;
-  margin-bottom: 4px;
+  font-size: 12px;
+  margin-bottom: 3px;
 }
 .item-detail {
-  font-size: 12px;
+  font-size: 10px;
   opacity: 0.9;
 }
 .item-remark {
-  font-size: 11px;
+  font-size: 10px;
   color: #ffeb3b;
-  margin-top: 4px;
+  margin-top: 3px;
   font-style: italic;
 }
 .schedule-empty {
-  padding: 20px;
+  padding: 14px;
   text-align: center;
   color: #c0c4cc;
   cursor: pointer;
   transition: all 0.2s;
-  min-height: 60px;
+  min-height: 50px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -421,5 +602,31 @@ onMounted(loadData)
 .schedule-empty:hover {
   background: #f5f7fa;
   color: #409eff;
+}
+/* 午间备注样式 */
+.noon-section {
+  background: #fefcf8;
+}
+.noon-row {
+  min-height: 40px;
+}
+.noon-column {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.noon-column:hover {
+  background: #fdf6ec;
+}
+.noon-empty {
+  min-height: 40px;
+  color: #e6a23c;
+}
+.noon-remark-display {
+  font-size: 11px;
+  color: #e6a23c;
+  line-height: 1.4;
+  word-break: break-all;
+  text-align: center;
+  padding: 4px;
 }
 </style>

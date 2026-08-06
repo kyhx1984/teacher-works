@@ -162,6 +162,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getLeaves,
   createLeave,
+  updateLeave,
   changeLeaveStatus,
   deleteLeave,
   batchUpdateLeaveStatus,

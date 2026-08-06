@@ -44,10 +44,10 @@
         <el-table-column prop="feedback" label="家长反馈" show-overflow-tooltip />
         <el-table-column label="附件" width="100">
           <template #default="scope">
-            <el-button 
-              v-if="scope.row.attachments" 
-              link 
-              type="primary" 
+            <el-button
+              v-if="scope.row.attachments"
+              link
+              type="primary"
               size="small"
               @click="viewAttachments(scope.row)"
             >
@@ -56,8 +56,10 @@
             <span v-else class="text-muted">无</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="scope">
+            <el-button link type="info" size="small" @click="openDetail(scope.row)">详情</el-button>
+            <el-button link type="primary" size="small" @click="openEdit(scope.row)">编辑</el-button>
             <el-popconfirm title="确定删除该沟通记录吗？" @confirm="handleDelete(scope.row.id)">
               <template #reference>
                 <el-button link type="danger" size="small">删除</el-button>
@@ -77,7 +79,7 @@
       />
     </el-card>
 
-    <el-dialog v-model="dialogVisible" title="登记沟通记录" width="560px">
+    <el-dialog v-model="dialogVisible" :title="form.id ? '编辑沟通记录' : '登记沟通记录'" width="560px">
       <el-form ref="formRef" :model="form" :rules="communicationRules" label-width="90px">
         <el-form-item label="学生" prop="student_id" required>
           <el-select v-model="form.student_id" placeholder="请选择学生" filterable style="width: 100%">
@@ -121,7 +123,12 @@
               <el-icon><Upload /></el-icon>选择文件
             </el-button>
             <template #tip>
-              <div class="el-upload__tip">支持图片、PDF、Word、Excel，最多5个文件</div>
+              <div class="el-upload__tip">
+                支持图片、PDF、Word、Excel，最多5个文件
+                <span v-if="form.id && existingAttachments.length" class="existing-tip">
+                  （已有 {{ existingAttachments.length }} 个附件，新上传将追加）
+                </span>
+              </div>
             </template>
           </el-upload>
         </el-form-item>
@@ -134,17 +141,73 @@
       </template>
     </el-dialog>
 
+    <!-- 详情查看对话框 -->
+    <el-dialog v-model="detailVisible" title="沟通记录详情" width="600px">
+      <el-descriptions :column="1" border v-if="detailData">
+        <el-descriptions-item label="学生">{{ detailData.student_name }}</el-descriptions-item>
+        <el-descriptions-item label="日期">{{ detailData.date }}</el-descriptions-item>
+        <el-descriptions-item label="沟通方式">
+          <el-tag size="small">{{ detailData.method }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="沟通内容">
+          <div class="detail-text">{{ detailData.content }}</div>
+        </el-descriptions-item>
+        <el-descriptions-item label="家长反馈">
+          <div class="detail-text">{{ detailData.feedback || '无' }}</div>
+        </el-descriptions-item>
+        <el-descriptions-item label="附件">
+          <div v-if="detailData.attachments" class="detail-attachments">
+            <template v-for="(file, index) in detailData.attachments.split(',').filter(f => f.trim())" :key="index">
+              <el-image
+                v-if="isImageFile(file)"
+                :src="`/uploads/${file.trim()}`"
+                :preview-src-list="detailImageList"
+                :initial-index="detailImageIndex(file)"
+                :preview-teleported="true"
+                fit="cover"
+                style="width: 80px; height: 80px; border-radius: 4px; margin-right: 8px; margin-bottom: 8px;"
+                :z-index="3000"
+              />
+              <el-button v-else link type="primary" size="small" @click="downloadFile({ path: file.trim(), name: file.trim() })">
+                <el-icon><Document /></el-icon>{{ file.trim() }}
+              </el-button>
+            </template>
+          </div>
+          <span v-else class="text-muted">无附件</span>
+        </el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="detailVisible = false">关闭</el-button>
+        <el-button type="primary" @click="openEdit(detailData); detailVisible = false">编辑</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 查看附件对话框 -->
     <el-dialog v-model="attachmentsVisible" title="附件列表" width="600px">
       <div class="attachments-list">
-        <div v-for="(file, index) in attachmentFiles" :key="index" class="attachment-item">
+        <!-- 图片附件预览区 -->
+        <div v-if="attachmentImages.length" class="attachment-images">
+          <el-image
+            v-for="(img, index) in attachmentImages"
+            :key="'img-' + index"
+            :src="img.url"
+            :preview-src-list="attachmentImages.map(i => i.url)"
+            :initial-index="index"
+            :preview-teleported="true"
+            fit="cover"
+            style="width: 100px; height: 100px; border-radius: 4px; margin-right: 8px; margin-bottom: 8px;"
+            :z-index="3000"
+          />
+        </div>
+        <!-- 非图片附件列表 -->
+        <div v-for="(file, index) in attachmentFiles" :key="'file-' + index" class="attachment-item">
           <el-icon><Document /></el-icon>
           <span class="file-name">{{ file.name }}</span>
           <el-button link type="primary" size="small" @click="downloadFile(file)">
             下载
           </el-button>
         </div>
-        <div v-if="attachmentFiles.length === 0" class="text-muted">
+        <div v-if="attachmentFiles.length === 0 && attachmentImages.length === 0" class="text-muted">
           暂无附件
         </div>
       </div>
@@ -158,6 +221,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getCommunications,
   createCommunication,
+  updateCommunication,
   deleteCommunication,
   batchDeleteCommunications,
   getStudents
@@ -172,11 +236,40 @@ const filtered = ref([])
 const students = ref([])
 const formRef = ref()
 
-const form = ref({ student_id: null, date: '', method: '电话', content: '', feedback: '', attachments: [] })
+const form = ref({ id: null, student_id: null, date: '', method: '电话', content: '', feedback: '', attachments: [] })
+
+// 编辑模式下已有的附件（用于提示用户）
+const existingAttachments = ref([])
 
 // 附件查看相关
 const attachmentsVisible = ref(false)
 const attachmentFiles = ref([])
+const attachmentImages = ref([])
+
+// 详情查看相关
+const detailVisible = ref(false)
+const detailData = ref(null)
+
+// 图片扩展名判断
+const isImageFile = (filename) => {
+  if (!filename) return false
+  const ext = filename.toLowerCase().split('.').pop()
+  return ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)
+}
+
+// 详情对话框中的图片预览列表
+const detailImageList = computed(() => {
+  if (!detailData.value || !detailData.value.attachments) return []
+  return detailData.value.attachments
+    .split(',')
+    .filter(f => f.trim() && isImageFile(f))
+    .map(f => `/uploads/${f.trim()}`)
+})
+
+// 详情对话框中某个图片的索引（用于 el-image initial-index）
+const detailImageIndex = (filename) => {
+  return detailImageList.value.indexOf(`/uploads/${filename.trim()}`)
+}
 
 // 沟通表单校验规则
 const communicationRules = {
@@ -216,11 +309,39 @@ const filterList = () => {
 
 const openCreate = () => {
   const today = new Date().toISOString().slice(0, 10)
-  form.value = { student_id: null, date: today, method: '电话', content: '', feedback: '', attachments: [] }
+  form.value = { id: null, student_id: null, date: today, method: '电话', content: '', feedback: '', attachments: [] }
+  existingAttachments.value = []
   dialogVisible.value = true
   nextTick(() => {
     formRef.value?.clearValidate()
   })
+}
+
+// 打开编辑对话框：回填已有数据，附件列表置空（新上传将追加到已有附件后）
+const openEdit = (row) => {
+  form.value = {
+    id: row.id,
+    student_id: row.student_id,
+    date: row.date,
+    method: row.method,
+    content: row.content || '',
+    feedback: row.feedback || '',
+    attachments: []
+  }
+  // 记录已有附件（仅用于提示）
+  existingAttachments.value = row.attachments
+    ? row.attachments.split(',').filter(f => f.trim())
+    : []
+  dialogVisible.value = true
+  nextTick(() => {
+    formRef.value?.clearValidate()
+  })
+}
+
+// 打开详情对话框
+const openDetail = (row) => {
+  detailData.value = row
+  detailVisible.value = true
 }
 
 const loadData = async () => {
@@ -254,7 +375,7 @@ const handleSave = async () => {
     formData.append('method', form.value.method)
     formData.append('content', form.value.content)
     formData.append('feedback', form.value.feedback || '')
-    
+
     // 添加附件文件
     if (form.value.attachments && form.value.attachments.length > 0) {
       form.value.attachments.forEach(file => {
@@ -263,9 +384,16 @@ const handleSave = async () => {
         }
       })
     }
-    
-    await createCommunication(formData)
-    ElMessage.success('登记成功')
+
+    if (form.value.id) {
+      // 编辑模式：调用更新接口（新附件将追加到已有附件后）
+      await updateCommunication(form.value.id, formData)
+      ElMessage.success('更新成功')
+    } else {
+      // 创建模式
+      await createCommunication(formData)
+      ElMessage.success('登记成功')
+    }
     dialogVisible.value = false
     loadData()
   } catch (e) {
@@ -312,18 +440,19 @@ const handleBatchDelete = async () => {
   }
 }
 
-// 查看附件
+// 查看附件：区分图片和非图片，图片用 el-image 预览，非图片显示下载链接
 const viewAttachments = (row) => {
   if (!row.attachments) {
     ElMessage.warning('该记录没有附件')
     return
   }
-  // 解析附件字符串（逗号分隔的文件名）
   const files = row.attachments.split(',').filter(f => f.trim())
-  attachmentFiles.value = files.map(filename => ({
-    name: filename,
-    path: filename
-  }))
+  attachmentImages.value = files
+    .filter(f => isImageFile(f))
+    .map(filename => ({ name: filename, url: `/uploads/${filename.trim()}` }))
+  attachmentFiles.value = files
+    .filter(f => !isImageFile(f))
+    .map(filename => ({ name: filename, path: filename.trim() }))
   attachmentsVisible.value = true
 }
 
@@ -345,5 +474,46 @@ onMounted(loadData)
 .action-buttons {
   display: flex;
   gap: 10px;
+}
+.text-muted {
+  color: #c0c4cc;
+  font-size: 13px;
+}
+/* 详情对话框内容文本 */
+.detail-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+.detail-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+/* 附件查看对话框中的图片预览区 */
+.attachment-images {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.attachment-item:last-child {
+  border-bottom: none;
+}
+.file-name {
+  flex: 1;
+  font-size: 13px;
+  color: #606266;
+  word-break: break-all;
+}
+.existing-tip {
+  color: #e6a23c;
+  font-size: 12px;
 }
 </style>

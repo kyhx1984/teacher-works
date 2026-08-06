@@ -31,16 +31,17 @@ const sendResponse = (res, data = {}, message = 'success', code = 200) => {
 
 // ================= RESOURCES =================
 
-// GET /resources - 获取资源列表（支持 type 筛选和 keyword 模糊搜索）
+// GET /resources - 获取资源列表（支持 type/category_id 筛选和 keyword 模糊搜索）
 router.get('/resources', async (req, res) => {
   try {
     const db = await getDb();
-    const { type, keyword } = req.query;
-    let sql = 'SELECT * FROM resources WHERE 1=1';
+    const { type, keyword, category_id } = req.query;
+    let sql = 'SELECT r.*, rc.name as category_name FROM resources r LEFT JOIN resource_categories rc ON r.category_id = rc.id WHERE 1=1';
     const params = [];
-    if (type) { sql += ' AND type = ?'; params.push(type); }
-    if (keyword) { sql += ' AND title LIKE ?'; params.push(`%${keyword}%`); }
-    sql += ' ORDER BY upload_time DESC';
+    if (type) { sql += ' AND r.type = ?'; params.push(type); }
+    if (keyword) { sql += ' AND r.title LIKE ?'; params.push(`%${keyword}%`); }
+    if (category_id) { sql += ' AND r.category_id = ?'; params.push(category_id); }
+    sql += ' ORDER BY r.upload_time DESC';
     const resources = await db.all(sql, params);
     sendResponse(res, resources);
   } catch (err) {
@@ -48,17 +49,17 @@ router.get('/resources', async (req, res) => {
   }
 });
 
-// POST /resources - 上传资源
+// POST /resources - 上传资源（支持 category_id 字段，关联资源类别表）
 router.post('/resources', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return sendResponse(res, null, 'No file uploaded', 400);
     }
-    const { title, type } = req.body;
+    const { title, type, category_id } = req.body;
     const db = await getDb();
     const result = await db.run(
-      'INSERT INTO resources (title, file_path, type) VALUES (?, ?, ?)',
-      [title || req.file.originalname, req.file.filename, type || 'unknown']
+      'INSERT INTO resources (title, file_path, type, category_id) VALUES (?, ?, ?, ?)',
+      [title || req.file.originalname, req.file.filename, type || 'unknown', category_id || null]
     );
     sendResponse(res, { id: result.lastID });
   } catch (err) {
@@ -81,6 +82,45 @@ router.delete('/resources/:id', async (req, res) => {
     }
     
     await db.run('DELETE FROM resources WHERE id = ?', [id]);
+    sendResponse(res, { id });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// ================= RESOURCE CATEGORIES (资源功能类别) =================
+
+// GET /resource-categories - 获取所有资源类别
+router.get('/resource-categories', async (req, res) => {
+  try {
+    const db = await getDb();
+    const categories = await db.all('SELECT * FROM resource_categories ORDER BY id ASC');
+    sendResponse(res, categories);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /resource-categories - 创建资源类别
+router.post('/resource-categories', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name) return sendResponse(res, null, '类别名称不能为空', 400);
+    
+    const db = await getDb();
+    const result = await db.run('INSERT INTO resource_categories (name) VALUES (?)', [name]);
+    sendResponse(res, { id: result.lastID });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// DELETE /resource-categories/:id - 删除资源类别
+router.delete('/resource-categories/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = await getDb();
+    await db.run('DELETE FROM resource_categories WHERE id = ?', [id]);
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -751,14 +791,15 @@ router.get('/homework-tasks', async (req, res) => {
   }
 });
 
-// POST /homework-tasks - 创建作业任务
-router.post('/homework-tasks', async (req, res) => {
+// POST /homework-tasks - 创建作业任务（支持图片上传）
+router.post('/homework-tasks', upload.single('image'), async (req, res) => {
   try {
     const { title, subject, content, homework_date, remark } = req.body;
+    const image_path = req.file ? req.file.filename : null;
     const db = await getDb();
     const result = await db.run(
-      'INSERT INTO homework_tasks (title, subject, content, homework_date, remark) VALUES (?, ?, ?, ?, ?)',
-      [title, subject, content, homework_date, remark]
+      'INSERT INTO homework_tasks (title, subject, content, homework_date, remark, image_path) VALUES (?, ?, ?, ?, ?, ?)',
+      [title, subject, content, homework_date, remark, image_path]
     );
     sendResponse(res, { id: result.lastID });
   } catch (err) {
@@ -766,19 +807,38 @@ router.post('/homework-tasks', async (req, res) => {
   }
 });
 
-// PUT /homework-tasks/:id - 更新作业任务
-router.put('/homework-tasks/:id', async (req, res) => {
+// PUT /homework-tasks/:id - 更新作业任务（支持图片上传/删除）
+router.put('/homework-tasks/:id', upload.single('image'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, subject, content, homework_date, remark } = req.body;
+    const { title, subject, content, homework_date, remark, delete_image } = req.body;
     const db = await getDb();
     
-    const existing = await db.get('SELECT id FROM homework_tasks WHERE id = ?', [id]);
+    const existing = await db.get('SELECT id, image_path FROM homework_tasks WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '任务不存在', 404);
     
+    let image_path = existing.image_path;
+    
+    // 处理图片上传
+    if (req.file) {
+      // 删除旧图片
+      if (image_path) {
+        const oldPath = path.join(__dirname, '..', 'uploads', image_path);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      }
+      image_path = req.file.filename;
+    } else if (delete_image === 'true' || delete_image === true) {
+      // 显式删除图片
+      if (image_path) {
+        const oldPath = path.join(__dirname, '..', 'uploads', image_path);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      }
+      image_path = null;
+    }
+    
     await db.run(
-      'UPDATE homework_tasks SET title = ?, subject = ?, content = ?, homework_date = ?, remark = ? WHERE id = ?',
-      [title, subject, content, homework_date, remark, id]
+      'UPDATE homework_tasks SET title = ?, subject = ?, content = ?, homework_date = ?, remark = ?, image_path = ? WHERE id = ?',
+      [title, subject, content, homework_date, remark, image_path, id]
     );
     sendResponse(res, { id });
   } catch (err) {
@@ -786,11 +846,18 @@ router.put('/homework-tasks/:id', async (req, res) => {
   }
 });
 
-// DELETE /homework-tasks/:id - 删除作业任务（同时删除相关记录）
+// DELETE /homework-tasks/:id - 删除作业任务（同时删除相关记录和图片）
 router.delete('/homework-tasks/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const db = await getDb();
+    
+    // 删除关联的图片文件
+    const task = await db.get('SELECT image_path FROM homework_tasks WHERE id = ?', [id]);
+    if (task && task.image_path) {
+      const imagePath = path.join(__dirname, '..', 'uploads', task.image_path);
+      if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+    }
     
     await db.run('DELETE FROM homework_records WHERE task_id = ?', [id]);
     await db.run('DELETE FROM homework_tasks WHERE id = ?', [id]);
@@ -944,10 +1011,10 @@ router.get('/schedule', async (req, res) => {
   }
 });
 
-// POST /schedule - 创建或更新课程表项
+// POST /schedule - 创建或更新课程表项（支持 time_slot 和 noon_remark）
 router.post('/schedule', async (req, res) => {
   try {
-    const { week_day, period, subject, teacher, room, color, remark } = req.body;
+    const { week_day, period, subject, teacher, room, color, remark, time_slot, noon_remark } = req.body;
     const db = await getDb();
     
     // 检查是否已存在
@@ -959,18 +1026,75 @@ router.post('/schedule', async (req, res) => {
     if (existing) {
       // 更新
       await db.run(
-        'UPDATE schedule SET subject = ?, teacher = ?, room = ?, color = ?, remark = ? WHERE id = ?',
-        [subject, teacher, room, color, remark, existing.id]
+        'UPDATE schedule SET subject = ?, teacher = ?, room = ?, color = ?, remark = ?, time_slot = ?, noon_remark = ? WHERE id = ?',
+        [subject, teacher, room, color, remark, time_slot || null, noon_remark || null, existing.id]
       );
       sendResponse(res, { id: existing.id, updated: true });
     } else {
       // 创建
       const result = await db.run(
-        'INSERT INTO schedule (week_day, period, subject, teacher, room, color, remark) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [week_day, period, subject, teacher, room, color, remark]
+        'INSERT INTO schedule (week_day, period, subject, teacher, room, color, remark, time_slot, noon_remark) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [week_day, period, subject, teacher, room, color, remark, time_slot || null, noon_remark || null]
       );
       sendResponse(res, { id: result.lastID, created: true });
     }
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// GET /schedule/time-slots - 获取默认时间段配置
+router.get('/schedule/time-slots', async (req, res) => {
+  try {
+    const db = await getDb();
+    const timeSlotsRow = await db.get("SELECT value FROM settings WHERE key = 'schedule_time_slots'");
+    
+    // 默认时间段配置
+    const defaultTimeSlots = [
+      { period: 1, name: '第一节', start: '08:00', end: '08:40' },
+      { period: 2, name: '第二节', start: '08:50', end: '09:30' },
+      { period: 3, name: '第三节', start: '09:50', end: '10:30' },
+      { period: 4, name: '第四节', start: '10:40', end: '11:20' },
+      { period: 0, name: '午休', start: '11:30', end: '13:30' },
+      { period: 5, name: '第五节', start: '13:40', end: '14:20' },
+      { period: 6, name: '第六节', start: '14:30', end: '15:10' },
+      { period: 7, name: '第七节', start: '15:20', end: '16:00' },
+      { period: 8, name: '第八节', start: '16:10', end: '16:50' }
+    ];
+    
+    let timeSlots = defaultTimeSlots;
+    if (timeSlotsRow && timeSlotsRow.value) {
+      try {
+        timeSlots = JSON.parse(timeSlotsRow.value);
+      } catch (e) {
+        // 解析失败，使用默认值
+      }
+    }
+    
+    sendResponse(res, timeSlots);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /schedule/time-slots - 保存自定义时间段配置
+router.put('/schedule/time-slots', async (req, res) => {
+  try {
+    const { time_slots } = req.body;
+    if (!Array.isArray(time_slots)) {
+      return sendResponse(res, null, 'time_slots 必须是数组', 400);
+    }
+    
+    const db = await getDb();
+    const existing = await db.get("SELECT key FROM settings WHERE key = 'schedule_time_slots'");
+    
+    if (existing) {
+      await db.run('UPDATE settings SET value = ? WHERE key = ?', [JSON.stringify(time_slots), 'schedule_time_slots']);
+    } else {
+      await db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['schedule_time_slots', JSON.stringify(time_slots)]);
+    }
+    
+    sendResponse(res, { saved: true });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -1083,37 +1207,95 @@ router.get('/settings', async (req, res) => {
   }
 });
 
-// POST /settings/upgrade-grade - 年级升级
-// 读取当前年级与入学年份，将年级向后推一级（六年级封顶），年份 +1
+// GET /settings/grade-info - 获取年级信息（动态计算当前年级）
+router.get('/settings/grade-info', async (req, res) => {
+  try {
+    const db = await getDb();
+    const gradeYearRow = await db.get("SELECT value FROM settings WHERE key = 'grade_year'");
+    const enrollmentYear = parseInt(gradeYearRow?.value || '2025', 10);
+    
+    // 动态计算当前年级
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1; // 0-indexed, so +1
+    
+    // 基础年级索引（0-indexed: 0=一年级, 1=二年级, ..., 5=六年级）
+    let gradeIndex = currentYear - enrollmentYear;
+    
+    // 如果当前月份 < 9，说明还没有过完9月升级，需要减1
+    if (currentMonth < 9) {
+      gradeIndex -= 1;
+    }
+    
+    // 限制在 [0, 5] 范围内
+    gradeIndex = Math.max(0, Math.min(5, gradeIndex));
+    
+    // 映射到年级名称
+    const gradeNames = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级'];
+    const gradeLevel = gradeNames[gradeIndex];
+    
+    sendResponse(res, {
+      grade_level: gradeLevel,
+      grade_year: enrollmentYear,
+      can_edit_year: true
+    });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /settings/grade-year - 更新入学年份
+router.put('/settings/grade-year', async (req, res) => {
+  try {
+    const { grade_year } = req.body;
+    if (!grade_year) {
+      return sendResponse(res, null, 'grade_year 不能为空', 400);
+    }
+    
+    const year = parseInt(grade_year, 10);
+    if (isNaN(year) || year < 2000 || year > 2100) {
+      return sendResponse(res, null, '入学年份格式不正确', 400);
+    }
+    
+    const db = await getDb();
+    const existing = await db.get("SELECT key FROM settings WHERE key = 'grade_year'");
+    
+    if (existing) {
+      await db.run('UPDATE settings SET value = ? WHERE key = ?', [String(year), 'grade_year']);
+    } else {
+      await db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['grade_year', String(year)]);
+    }
+    
+    sendResponse(res, { grade_year: year });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /settings/upgrade-grade - 年级升级（保留向后兼容，基于入学年份重新计算）
 router.post('/settings/upgrade-grade', async (req, res) => {
   try {
     const db = await getDb();
-    // 读取当前年级与入学年份
-    const gradeLevel = await db.get('SELECT value FROM settings WHERE key = ?', ['grade_level']);
-    const gradeYear = await db.get('SELECT value FROM settings WHERE key = ?', ['grade_year']);
-
-    // 年级顺序映射
-    const gradeOrder = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级'];
-    const currentIndex = gradeOrder.indexOf(gradeLevel?.value || '一年级');
-    const nextIndex = Math.min(currentIndex + 1, gradeOrder.length - 1);
-    const nextGrade = gradeOrder[nextIndex];
-    const nextYear = String(Number(gradeYear?.value || '2025') + 1);
-
-    // 更新年级与入学年份
-    const existingLevel = await db.get('SELECT key FROM settings WHERE key = ?', ['grade_level']);
-    if (existingLevel) {
-      await db.run('UPDATE settings SET value = ? WHERE key = ?', [nextGrade, 'grade_level']);
-    } else {
-      await db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['grade_level', nextGrade]);
+    const gradeYearRow = await db.get("SELECT value FROM settings WHERE key = 'grade_year'");
+    const enrollmentYear = parseInt(gradeYearRow?.value || '2025', 10);
+    
+    // 将入学年份减1，相当于所有年级升一级
+    const newEnrollmentYear = enrollmentYear - 1;
+    
+    await db.run('UPDATE settings SET value = ? WHERE key = ?', [String(newEnrollmentYear), 'grade_year']);
+    
+    // 重新计算年级
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+    let gradeIndex = currentYear - newEnrollmentYear;
+    if (currentMonth < 9) {
+      gradeIndex -= 1;
     }
-    const existingYear = await db.get('SELECT key FROM settings WHERE key = ?', ['grade_year']);
-    if (existingYear) {
-      await db.run('UPDATE settings SET value = ? WHERE key = ?', [nextYear, 'grade_year']);
-    } else {
-      await db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['grade_year', nextYear]);
-    }
-
-    sendResponse(res, { grade_level: nextGrade, grade_year: nextYear }, '年级升级成功');
+    gradeIndex = Math.max(0, Math.min(5, gradeIndex));
+    
+    const gradeNames = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级'];
+    const gradeLevel = gradeNames[gradeIndex];
+    
+    sendResponse(res, { grade_level: gradeLevel, grade_year: newEnrollmentYear }, '年级升级成功');
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }

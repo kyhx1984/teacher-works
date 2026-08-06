@@ -90,6 +90,16 @@
         />
       </div>
 
+      <!-- 任务图片预览 -->
+      <div v-if="selectedTask.image_path" class="task-preview">
+        <el-image
+          :src="`/uploads/${selectedTask.image_path}`"
+          :preview-src-list="previewImages"
+          fit="contain"
+          style="max-width: 100%; max-height: 400px;"
+        />
+      </div>
+
       <el-table :data="taskRecords" style="width: 100%" v-loading="recordsLoading">
         <el-table-column prop="student_name" label="学生姓名" width="120" />
         <el-table-column prop="status" label="状态" width="100">
@@ -163,12 +173,30 @@
           />
         </el-form-item>
         <el-form-item label="作业内容">
-          <el-input 
-            v-model="taskForm.content" 
-            type="textarea" 
+          <el-input
+            v-model="taskForm.content"
+            type="textarea"
             :rows="3"
             placeholder="可选，描述作业要求等"
           />
+        </el-form-item>
+        <el-form-item label="参考图片">
+          <el-upload
+            ref="uploadRef"
+            :auto-upload="false"
+            :limit="1"
+            accept="image/*"
+            :on-change="onImageChange"
+            :on-remove="onImageRemove"
+            :file-list="imageFileList"
+          >
+            <el-button type="primary" plain>
+              <el-icon><Upload /></el-icon>选择图片
+            </el-button>
+            <template #tip>
+              <div class="el-upload__tip">支持上传一张作业参考图片</div>
+            </template>
+          </el-upload>
         </el-form-item>
         <el-form-item label="备注">
           <el-input 
@@ -282,6 +310,9 @@ const filteredTasks = ref([])
 const taskDialogVisible = ref(false)
 const editingTask = ref(null)
 const taskFormRef = ref()
+const uploadRef = ref()
+const imageFile = ref(null)
+const imageFileList = ref([])
 
 const taskForm = ref({
   title: '',
@@ -310,6 +341,11 @@ const savingRecord = ref(false)
 const editingRecord = ref(null)
 const editingRecordScore = ref(null)
 const editingRecordRemark = ref('')
+
+// 预览图片列表
+const previewImages = computed(() => {
+  return selectedTask.value?.image_path ? [`/uploads/${selectedTask.value.image_path}`] : []
+})
 
 // 计算进度百分比
 const getProgress = (task) => {
@@ -353,6 +389,9 @@ const loadTasks = async () => {
 const openCreateTask = () => {
   editingTask.value = null
   taskForm.value = { title: '', subject: '语文', content: '', homework_date: '', remark: '' }
+  imageFile.value = null
+  imageFileList.value = []
+  if (uploadRef.value) uploadRef.value.clearFiles()
   taskDialogVisible.value = true
 }
 
@@ -366,7 +405,20 @@ const openEditTask = (task) => {
     homework_date: task.homework_date || '',
     remark: task.remark || ''
   }
+  imageFile.value = null
+  imageFileList.value = task.image_path ? [{ name: 'image', url: `/uploads/${task.image_path}` }] : []
   taskDialogVisible.value = true
+}
+
+// 图片选择
+const onImageChange = (file) => {
+  imageFile.value = file.raw
+}
+
+// 图片移除
+const onImageRemove = () => {
+  imageFile.value = null
+  imageFileList.value = []
 }
 
 // 保存任务
@@ -379,11 +431,22 @@ const handleSaveTask = async () => {
   }
   saving.value = true
   try {
+    // 使用 FormData 提交，支持图片上传
+    const formData = new FormData()
+    formData.append('title', taskForm.value.title)
+    formData.append('subject', taskForm.value.subject)
+    formData.append('content', taskForm.value.content || '')
+    formData.append('homework_date', taskForm.value.homework_date || '')
+    formData.append('remark', taskForm.value.remark || '')
+    if (imageFile.value) {
+      formData.append('image', imageFile.value)
+    }
+
     if (editingTask.value) {
-      await updateHomeworkTask(editingTask.value.id, taskForm.value)
+      await updateHomeworkTask(editingTask.value.id, formData)
       ElMessage.success('更新成功')
     } else {
-      await createHomeworkTask(taskForm.value)
+      await createHomeworkTask(formData)
       ElMessage.success('创建成功')
     }
     taskDialogVisible.value = false
@@ -592,5 +655,12 @@ onMounted(loadTasks)
 }
 .task-content {
   margin-bottom: 20px;
+}
+.task-preview {
+  margin-bottom: 20px;
+  padding: 20px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  text-align: center;
 }
 </style>

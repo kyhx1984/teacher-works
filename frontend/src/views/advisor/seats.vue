@@ -9,7 +9,7 @@
             <el-input-number
               v-model="columns"
               :min="3"
-              :max="8"
+              :max="10"
               :step="1"
               size="small"
               @change="onColumnsChange"
@@ -99,6 +99,7 @@ const loadSeats = async () => {
   try {
     const data = await getSeats()
     columns.value = data.columns || 4
+    targetRows.value = data.targetRows || 8
     rows.value = data.rows || []
     selected.value = null
   } catch (e) {
@@ -216,7 +217,7 @@ const handleSave = async () => {
   })
   saving.value = true
   try {
-    await saveSeats({ columns: columns.value, layout })
+    await saveSeats({ columns: columns.value, targetRows: targetRows.value, layout })
     ElMessage.success('座位保存成功')
     selected.value = null
   } catch (e) {

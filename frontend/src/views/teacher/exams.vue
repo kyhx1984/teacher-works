@@ -83,13 +83,27 @@
             <el-option label="期末考试" value="期末考试" />
           </el-select>
         </el-form-item>
+        <el-form-item label="资源类别">
+          <el-select v-model="form.resource_category" placeholder="全部类别" clearable style="width: 100%" @change="onCategoryChange">
+            <el-option v-for="cat in categories" :key="cat.id" :label="cat.name" :value="cat.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="关联资源">
-          <el-select v-model="form.resource_id" placeholder="选择资源文件（可选）" clearable style="width: 100%">
-            <el-option 
-              v-for="r in resources" 
-              :key="r.id" 
-              :label="`${r.title} (${r.type})`" 
-              :value="r.id" 
+          <el-select
+            v-model="form.resource_id"
+            placeholder="输入资源名称模糊搜索"
+            clearable
+            filterable
+            remote
+            :remote-method="searchResources"
+            :loading="resourceLoading"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="r in resourceOptions"
+              :key="r.id"
+              :label="`${r.title} (${r.type})`"
+              :value="r.id"
             />
           </el-select>
           <div class="form-tip">在"资源管理"中上传试卷PDF、Word、图片等文件</div>
@@ -231,9 +245,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { 
+import {
   getExams, createExam, updateExam, deleteExam,
-  getResources,
+  getResources, getResourceCategories,
   getExamRecords, createExamRecord, updateExamRecord,
   exportExamTemplate, importExamRecords
 } from '../../api'
@@ -249,6 +263,11 @@ const filtered = ref([])
 const previewData = ref({})
 const previewContent = ref('')
 const resources = ref([])
+// 资源类别列表
+const categories = ref([])
+// 远程搜索相关
+const resourceOptions = ref([])
+const resourceLoading = ref(false)
 
 // 考试记录相关
 const recordsVisible = ref(false)
@@ -268,7 +287,7 @@ const importUploadRef = ref()
 const importFile = ref(null)
 const importExamId = ref(null)
 
-const form = ref({ id: null, title: '', type: '', content: '', resource_id: null })
+const form = ref({ id: null, title: '', type: '', content: '', resource_id: null, remark: '', resource_category: null })
 
 const getTypeTag = (type) => {
   const map = { 单元检测: 'primary', 专项练习: 'success', 期中考试: 'warning', 期末考试: 'danger' }
@@ -309,8 +328,43 @@ const preview = (row) => {
 }
 
 const openCreate = () => {
-  form.value = { id: null, title: '', type: '', content: '', resource_id: null, remark: '' }
+  form.value = { id: null, title: '', type: '', content: '', resource_id: null, remark: '', resource_category: null }
+  resourceOptions.value = []
+  // 打开对话框时加载部分资源供选择
+  searchResources('')
   dialogVisible.value = true
+}
+
+// 资源远程搜索（支持按类别筛选）
+const searchResources = async (query) => {
+  resourceLoading.value = true
+  try {
+    const params = {}
+    if (query) params.keyword = query
+    if (form.value.resource_category) params.category_id = form.value.resource_category
+    const queryString = new URLSearchParams(params).toString()
+    const url = queryString ? `/resources?${queryString}` : '/resources'
+    resourceOptions.value = await getResources(url)
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    resourceLoading.value = false
+  }
+}
+
+// 类别变化时重新搜索资源
+const onCategoryChange = () => {
+  form.value.resource_id = null
+  searchResources('')
+}
+
+// 加载资源类别
+const loadCategories = async () => {
+  try {
+    categories.value = await getResourceCategories()
+  } catch (e) {
+    // 拦截器已提示
+  }
 }
 
 // 搜索防抖
@@ -347,6 +401,8 @@ const loadResources = async () => {
     // 拦截器已提示
   }
 }
+
+// 删除旧的 loadResources 引用（不再需要加载全部资源到下拉框）
 
 const handleSave = async () => {
   if (!form.value.title) {
@@ -517,7 +573,7 @@ const scoreClass = (score) => {
 
 onMounted(() => {
   loadExams()
-  loadResources()
+  loadCategories()
 })
 </script>
 

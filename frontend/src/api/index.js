@@ -14,6 +14,11 @@ export const uploadResource = (formData) =>
   request.post('/resources', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const deleteResource = (id) => request.delete(`/resources/${id}`)
 
+// ================= 资源类别管理 =================
+export const getResourceCategories = () => request.get('/resource-categories')
+export const createResourceCategory = (data) => request.post('/resource-categories', data)
+export const deleteResourceCategory = (id) => request.delete(`/resource-categories/${id}`)
+
 // ================= 试卷管理 =================
 export const getExams = (url = '/exams') => request.get(url)
 export const createExam = (data) => request.post('/exams', data)
@@ -48,8 +53,8 @@ export const exportRecitationTask = (taskId) => request.get(`/recitation-tasks/$
 
 // ================= 作业管理 =================
 export const getHomeworkTasks = () => request.get('/homework-tasks')
-export const createHomeworkTask = (data) => request.post('/homework-tasks', data)
-export const updateHomeworkTask = (id, data) => request.put(`/homework-tasks/${id}`, data)
+export const createHomeworkTask = (formData) => request.post('/homework-tasks', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const updateHomeworkTask = (id, formData) => request.put(`/homework-tasks/${id}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const deleteHomeworkTask = (id) => request.delete(`/homework-tasks/${id}`)
 export const getHomeworkRecords = (taskId) => request.get(`/homework-tasks/${taskId}/records`)
 export const createHomeworkRecords = (taskId, data) => request.post(`/homework-tasks/${taskId}/records`, data)
@@ -61,6 +66,9 @@ export const exportHomeworkTask = (taskId) => request.get(`/homework-tasks/${tas
 export const getSchedule = (week) => request.get(`/schedule${week ? `?week=${week}` : ''}`)
 export const saveSchedule = (data) => request.post('/schedule', data)
 export const deleteSchedule = (id) => request.delete(`/schedule/${id}`)
+// 课程表时间段配置
+export const getScheduleTimeSlots = () => request.get('/schedule/time-slots')
+export const saveScheduleTimeSlots = (data) => request.put('/schedule/time-slots', data)
 
 // ================= 临时工作区 =================
 export const getTasks = () => request.get('/tasks')
@@ -113,6 +121,7 @@ export const updateEvaluation = (id, data) => request.put(`/evaluations/${id}`, 
 // ================= 家校沟通 =================
 export const getCommunications = () => request.get('/communications')
 export const createCommunication = (formData) => request.post('/communications', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const updateCommunication = (id, formData) => request.put(`/communications/${id}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const deleteCommunication = (id) => request.delete(`/communications/${id}`)
 export const batchDeleteCommunications = (ids) => request.delete('/communications/batch', { data: { ids } })
 
@@ -124,6 +133,9 @@ export const saveSeats = (data) => request.put('/seats', data)
 export const getSettings = () => request.get('/settings')
 export const updateSetting = (key, value) => request.put(`/settings/${key}`, { value })
 export const upgradeGrade = () => request.post('/settings/upgrade-grade')
+// 年级信息（动态计算）
+export const getGradeInfo = () => request.get('/settings/grade-info')
+export const updateGradeYear = (year) => request.put('/settings/grade-year', { grade_year: year })
 
 // ================= 导出 =================
 // 成绩导出

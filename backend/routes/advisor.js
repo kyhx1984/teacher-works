@@ -402,7 +402,7 @@ const setSetting = async (db, key, value) => {
 };
 
 // GET /seats - 获取座位表
-// 读取 settings 中的 seat_columns（默认 4）与 seat_layout（JSON 布局）
+// 读取 settings 中的 seat_columns（默认 4）、seat_rows（默认行数）与 seat_layout（JSON 布局）
 // 若有保存的布局则按布局返回，否则按学号顺序与列数自动排列
 router.get('/seats', async (req, res) => {
   try {
@@ -411,6 +411,10 @@ router.get('/seats', async (req, res) => {
     const colValue = await getSetting(db, 'seat_columns');
     let columns = colValue ? parseInt(colValue, 10) : 4;
     if (!columns || columns < 1) columns = 4;
+    // 读取目标行数设置（默认 8）
+    const rowValue = await getSetting(db, 'seat_rows');
+    let targetRows = rowValue ? parseInt(rowValue, 10) : 8;
+    if (!targetRows || targetRows < 1) targetRows = 8;
     // 读取已保存的座位布局
     const layoutValue = await getSetting(db, 'seat_layout');
     let savedLayout = null;
@@ -421,10 +425,13 @@ router.get('/seats', async (req, res) => {
     const students = await db.all('SELECT id, name FROM students ORDER BY id ASC');
 
     // 将扁平布局（[{student_id,row,col}]）构建为二维 rows 网格
+    // 确保至少展示 targetRows 行，即使部分行为空
     const buildRows = (entries) => {
-      const rowCount = entries.length
+      const layoutRows = entries.length
         ? Math.max(...entries.map((e) => e.row)) + 1
         : 0;
+      // 取布局行数和目标行数中的较大值，确保空行也能展示
+      const rowCount = Math.max(layoutRows, targetRows);
       const rows = [];
       for (let r = 0; r < rowCount; r++) {
         rows.push(new Array(columns).fill(null));
@@ -451,24 +458,27 @@ router.get('/seats', async (req, res) => {
       rows = buildRows(autoLayout);
     }
 
-    sendResponse(res, { columns, rows });
+    sendResponse(res, { columns, rows, targetRows });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
 });
 
 // PUT /seats - 保存座位表
-// 接收 { columns, layout }，layout 为 [{student_id,row,col}, ...]
-// 保存到 settings 表的 seat_columns 与 seat_layout
+// 接收 { columns, targetRows, layout }，layout 为 [{student_id,row,col}, ...]
+// 保存到 settings 表的 seat_columns、seat_rows 与 seat_layout
 router.put('/seats', async (req, res) => {
   try {
-    const { columns, layout } = req.body;
+    const { columns, targetRows, layout } = req.body;
     const db = await getDb();
     let cols = parseInt(columns, 10);
     if (!cols || cols < 1) cols = 4;
+    let rows = parseInt(targetRows, 10);
+    if (!rows || rows < 1) rows = 8;
     await setSetting(db, 'seat_columns', String(cols));
+    await setSetting(db, 'seat_rows', String(rows));
     await setSetting(db, 'seat_layout', JSON.stringify(Array.isArray(layout) ? layout : []));
-    sendResponse(res, { columns: cols, saved: true });
+    sendResponse(res, { columns: cols, targetRows: rows, saved: true });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -747,6 +757,66 @@ router.post('/communications', leaveImageUpload.array('attachments', 5), async (
       [student_id, date, method, content, feedback, attachments]
     );
     sendResponse(res, { id: result.lastID, attachments });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /communications/:id - 编辑沟通记录（支持更新基本信息和附件）
+router.put('/communications/:id', leaveImageUpload.array('attachments', 5), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { student_id, date, method, content, feedback, replace_attachments } = req.body;
+    const db = await getDb();
+    
+    const existing = await db.get('SELECT id, attachments FROM communications WHERE id = ?', [id]);
+    if (!existing) return sendResponse(res, null, '沟通记录不存在', 404);
+    
+    // 构建更新字段
+    const updates = [];
+    const params = [];
+    
+    if (student_id !== undefined) { updates.push('student_id = ?'); params.push(student_id); }
+    if (date !== undefined) { updates.push('date = ?'); params.push(date); }
+    if (method !== undefined) { updates.push('method = ?'); params.push(method); }
+    if (content !== undefined) { updates.push('content = ?'); params.push(content); }
+    if (feedback !== undefined) { updates.push('feedback = ?'); params.push(feedback); }
+    
+    // 处理附件
+    if (req.files && req.files.length > 0) {
+      const newAttachments = req.files.map(f => f.filename).join(',');
+      
+      if (replace_attachments === 'true' || replace_attachments === true) {
+        // 替换模式：删除旧附件，使用新附件
+        if (existing.attachments) {
+          const oldFiles = existing.attachments.split(',');
+          oldFiles.forEach(file => {
+            const filePath = path.join(__dirname, '..', 'uploads', file.trim());
+            if (fs.existsSync(filePath)) {
+              try { fs.unlinkSync(filePath); } catch (e) { /* 忽略删除失败 */ }
+            }
+          });
+        }
+        updates.push('attachments = ?');
+        params.push(newAttachments);
+      } else {
+        // 追加模式：将新附件添加到现有附件列表
+        const combinedAttachments = existing.attachments 
+          ? existing.attachments + ',' + newAttachments 
+          : newAttachments;
+        updates.push('attachments = ?');
+        params.push(combinedAttachments);
+      }
+    }
+    
+    if (updates.length === 0) {
+      return sendResponse(res, null, '没有需要更新的字段', 400);
+    }
+    
+    params.push(id);
+    await db.run(`UPDATE communications SET ${updates.join(', ')} WHERE id = ?`, params);
+    
+    sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
