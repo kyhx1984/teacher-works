@@ -43,28 +43,27 @@
         <div class="gender-legend">
           <span class="legend-item"><span class="legend-dot male"></span>男</span>
           <span class="legend-item"><span class="legend-dot female"></span>女</span>
-          <span class="legend-item"><span class="legend-dot empty"></span>空位</span>
         </div>
         <div class="hint" v-if="selected">
           已选择「{{ selectedName }}」，请点击另一个座位进行交换（再次点击当前座位可取消）
         </div>
         <div class="seat-rows" v-if="rows.length">
-          <div class="seat-row" v-for="(row, i) in rows" :key="i">
-            <div class="row-label">第{{ i + 1 }}排</div>
-            <div
-              v-for="(seat, j) in row"
-              :key="j"
-              class="seat"
-              :class="{ empty: !seat, selected: isSelected(i, j), female: seat && seat.gender === '女' }"
-              @click="onSeatClick(i, j)"
-            >
-              <template v-if="seat">
-                <div class="seat-name">{{ seat.name }}</div>
-                <div class="seat-id">{{ seat.student_id }}</div>
+          <template v-for="(row, i) in rows" :key="i">
+            <div class="seat-row" v-if="row.some((s) => s)">
+              <div class="row-label">第{{ i + 1 }}排</div>
+              <template v-for="(seat, j) in row" :key="j">
+                <div
+                  v-if="seat"
+                  class="seat"
+                  :class="{ selected: isSelected(i, j), female: seat.gender === '女' }"
+                  @click="onSeatClick(i, j)"
+                >
+                  <div class="seat-name">{{ seat.name }}</div>
+                  <div class="seat-id">{{ seat.student_id }}</div>
+                </div>
               </template>
-              <template v-else><div class="seat-empty">空</div></template>
             </div>
-          </div>
+          </template>
         </div>
         <el-empty v-else description="暂无学生，请先在「学生档案」中录入学生" :image-size="90" />
       </div>
@@ -303,10 +302,6 @@ onMounted(loadSeats)
   border-color: #f8d3ce;
   background: #fdf0ee;
 }
-.legend-dot.empty {
-  border: 1px dashed #dcdfe6;
-  background: #fafafa;
-}
 .seat-rows {
   display: flex;
   flex-direction: column;
@@ -318,8 +313,9 @@ onMounted(loadSeats)
   align-items: center;
   gap: 14px;
 }
-/* 过道效果：每两列间隔开（每组第二列后的座位增加左侧间距） */
-.seat-row .seat:nth-child(3n+1) {
+/* 过道效果：每两个座位一组（同桌），组与组之间留出过道。
+   行标签是行内第 1 个子元素，座位从第 2 个开始，故第 3、5、7… 个座位前加间距 */
+.seat-row .seat:nth-child(n+4):nth-child(even) {
   margin-left: 28px;
 }
 .row-label {
@@ -357,10 +353,6 @@ onMounted(loadSeats)
   box-shadow: 0 4px 10px rgba(245, 108, 108, 0.22);
   background: #fbe2de;
 }
-.seat.empty {
-  background: #fafafa;
-  border: 1px dashed #dcdfe6;
-}
 .seat.selected {
   outline: 2px solid #409eff;
   background: #d9ecff;
@@ -380,9 +372,5 @@ onMounted(loadSeats)
   font-size: 11px;
   color: #909399;
   margin-top: 2px;
-}
-.seat-empty {
-  font-size: 12px;
-  color: #c0c4cc;
 }
 </style>
