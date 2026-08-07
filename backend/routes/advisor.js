@@ -248,6 +248,10 @@ router.post('/scores/import', upload.single('file'), async (req, res) => {
         'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
         [row.student_id, row.subject, row.score, row.exam_name || '期中考试']
       );
+      // 导入的成绩名称与试卷标题一致时，自动标记为「加入分析」
+      try {
+        await db.run('UPDATE exams SET analyze = 1 WHERE title = ? AND analyze = 0', [row.exam_name || '期中考试']);
+      } catch (e) {}
       imported++;
     }
 
@@ -269,6 +273,12 @@ router.post('/scores', async (req, res) => {
       'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
       [student_id, subject, score, exam_name || '期中考试']
     );
+    // 考试名称与试卷管理中的试卷标题一致时，自动标记为「加入分析」，录入成绩即建立关联
+    try {
+      await db.run('UPDATE exams SET analyze = 1 WHERE title = ? AND analyze = 0', [exam_name || '期中考试']);
+    } catch (e) {
+      console.error('auto-analyze failed:', e && e.message);
+    }
     sendResponse(res, { id: result.lastID });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -287,6 +297,10 @@ router.put('/scores/:id', async (req, res) => {
       'UPDATE scores SET student_id=?, subject=?, score=?, exam_name=? WHERE id=?',
       [student_id, subject, score, exam_name, id]
     );
+    // 更新后的考试名称与试卷标题一致时，自动标记为「加入分析」
+    try {
+      await db.run('UPDATE exams SET analyze = 1 WHERE title = ? AND analyze = 0', [exam_name || '期中考试']);
+    } catch (e) {}
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);

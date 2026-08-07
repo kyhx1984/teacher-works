@@ -25,12 +25,31 @@
       </template>
       <el-form :inline="true" :model="filterForm" class="filter-form">
         <el-form-item label="考试名称">
-          <el-select v-model="filterForm.exam_name" placeholder="全部考试" clearable @change="applyFilter">
-            <el-option v-for="name in examNames" :key="name" :label="name" :value="name" />
+          <el-select
+            v-model="filterForm.exam_name"
+            placeholder="全部考试"
+            clearable
+            filterable
+            popper-class="exam-select-popper"
+            style="width: 340px"
+            @change="applyFilter"
+          >
+            <el-option
+              v-for="opt in examOptions"
+              :key="opt.name"
+              :label="opt.name"
+              :value="opt.name"
+            >
+              <div class="exam-opt" :title="opt.name">
+                <span class="exam-opt-name">{{ opt.name }}</span>
+                <el-tag v-if="opt.analyzed" size="small" type="success">已加入分析</el-tag>
+                <span class="exam-opt-count">{{ opt.count }} 条成绩</span>
+              </div>
+            </el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="科目">
-          <el-select v-model="filterForm.subject" placeholder="全部科目" clearable @change="applyFilter">
+          <el-select v-model="filterForm.subject" placeholder="全部科目" clearable style="width: 140px" @change="applyFilter">
             <el-option v-for="subj in subjects" :key="subj" :label="subj" :value="subj" />
           </el-select>
         </el-form-item>
@@ -51,6 +70,21 @@
           <el-button @click="resetFilter">重置</el-button>
         </el-form-item>
       </el-form>
+      <!-- 当前所选考试与试卷管理的关联信息 -->
+      <div v-if="selectedExam" class="exam-link-card">
+        <div class="link-title">
+          {{ selectedExam.title }}
+          <el-tag size="small" type="success">已加入分析</el-tag>
+          <el-tag size="small" type="info">{{ selectedExam.type || '未分类' }}</el-tag>
+          <span class="link-meta">创建于 {{ formatDate(selectedExam.created_at) }}</span>
+        </div>
+        <div class="link-desc">
+          该试卷来自「试卷管理」，已录入 <b>{{ selectedExam.count }}</b> 条成绩，覆盖
+          <b>{{ selectedExam.studentCount }}</b> 名学生
+          <template v-if="selectedExam.remark">，备注：{{ selectedExam.remark }}</template>。
+          <template v-if="selectedExam.count === 0">点击右上角「录入成绩」，考试名称将自动带出并直接关联该试卷。</template>
+        </div>
+      </div>
     </el-card>
 
     <!-- 班级统计概览 -->
@@ -247,10 +281,23 @@
             allow-create
             default-first-option
             clearable
+            popper-class="exam-select-popper"
             style="width: 100%"
           >
-            <el-option v-for="name in examNames" :key="name" :label="name" :value="name" />
+            <el-option
+              v-for="opt in examOptions"
+              :key="opt.name"
+              :label="opt.name"
+              :value="opt.name"
+            >
+              <div class="exam-opt" :title="opt.name">
+                <span class="exam-opt-name">{{ opt.name }}</span>
+                <el-tag v-if="opt.analyzed" size="small" type="success">已加入分析</el-tag>
+                <span class="exam-opt-count">{{ opt.count }} 条成绩</span>
+              </div>
+            </el-option>
           </el-select>
+          <div class="form-tip">选择「已加入分析」的试卷后，录入的成绩将自动关联到该试卷的分析</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -295,6 +342,9 @@ const importFile = ref(null)
 // 已加入分析的试卷标题（来自试卷管理，analyze=1）
 const analyzedExams = ref([])
 
+// 试卷管理中的全部试卷（含类型/创建时间/备注等元信息，用于展示真实关联）
+const allExams = ref([])
+
 // 筛选表单
 const filterForm = ref({
   exam_name: '',
@@ -306,13 +356,46 @@ const filterForm = ref({
 const trendChartRef = ref(null)
 let trendChartInstance = null
 
-// 获取所有考试名称（去重）：已加入分析的试卷优先，其次是有成绩数据的考试
-// 保证试卷管理中标记「加入分析」的考试一定出现在筛选与录入选项中
-const examNames = computed(() => {
-  const names = new Set(scores.value.map(s => s.exam_name).filter(Boolean))
-  analyzedExams.value.forEach(n => names.add(n))
-  return Array.from(names).sort()
+// 考试名称选项：已加入分析的试卷优先，其次是有成绩数据的考试
+// 每个选项带「是否已加入分析」标记与成绩条数，让关联一目了然
+const examOptions = computed(() => {
+  const countMap = {}
+  scores.value.forEach(s => {
+    if (s.exam_name) countMap[s.exam_name] = (countMap[s.exam_name] || 0) + 1
+  })
+  const options = []
+  const seen = new Set()
+  allExams.value.forEach(e => {
+    if (e.analyze === 1 && e.title && !seen.has(e.title)) {
+      seen.add(e.title)
+      options.push({ name: e.title, analyzed: true, count: countMap[e.title] || 0, exam: e })
+    }
+  })
+  Object.keys(countMap).sort().forEach(name => {
+    if (!seen.has(name)) {
+      seen.add(name)
+      const e = allExams.value.find(x => x.title === name)
+      options.push({ name, analyzed: false, count: countMap[name], exam: e || null })
+    }
+  })
+  return options
 })
+
+// 当前所选考试与试卷管理的关联信息（仅当选中的考试确实来自试卷管理且已加入分析时展示）
+const selectedExam = computed(() => {
+  const name = filterForm.value.exam_name
+  if (!name) return null
+  const e = allExams.value.find(x => x.title === name)
+  if (!e || e.analyze !== 1) return null
+  const rows = scores.value.filter(s => s.exam_name === name)
+  return {
+    ...e,
+    count: rows.length,
+    studentCount: new Set(rows.map(r => r.student_id)).size
+  }
+})
+
+const formatDate = (d) => (d ? String(d).slice(0, 10) : '—')
 
 // 获取所有科目（去重）
 const subjects = computed(() => {
@@ -557,7 +640,8 @@ const loadData = async () => {
     const [scoreRows, studentRows, examRows] = await Promise.all([getScores(), getStudents(), getExams()])
     scores.value = scoreRows
     students.value = studentRows
-    analyzedExams.value = (examRows || []).filter(e => e.analyze === 1).map(e => e.title)
+    allExams.value = examRows || []
+    analyzedExams.value = allExams.value.filter(e => e.analyze === 1).map(e => e.title)
     buildAnalysis(scoreRows)
     // 数据加载完成后重置分页并渲染图表
     currentPage.value = 1
@@ -759,6 +843,56 @@ onBeforeUnmount(() => {
   gap: 10px;
   flex-wrap: wrap;
 }
+/* 考试名称选项：名称可省略、标签与条数稳定展示 */
+.exam-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 320px;
+}
+.exam-opt-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+}
+.exam-opt-count {
+  margin-left: auto;
+  color: #909399;
+  font-size: 12px;
+  white-space: nowrap;
+}
+/* 下拉面板宽度自适应内容（面板挂在 body 下，需全局选择器） */
+:global(.exam-select-popper) {
+  min-width: 400px !important;
+}
+/* 当前所选考试与试卷管理的关联信息卡 */
+.exam-link-card {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: #f0f9eb;
+  border: 1px solid #e1f3d8;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #303133;
+}
+.link-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-weight: bold;
+}
+.link-meta {
+  color: #909399;
+  font-weight: normal;
+  font-size: 12px;
+}
+.link-desc {
+  margin-top: 4px;
+  color: #606266;
+  line-height: 1.6;
+}
 .stat-card {
   text-align: center;
   padding: 20px;
@@ -792,6 +926,11 @@ onBeforeUnmount(() => {
 .empty-tip {
   color: #909399;
   font-size: 13px;
+}
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.6;
 }
 .avg-good { color: #67c23a; font-weight: bold; }
 .avg-mid { color: #409eff; }
