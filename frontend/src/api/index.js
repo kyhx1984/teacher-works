@@ -89,6 +89,9 @@ export const importStudents = (formData) =>
 // 学生头像上传（先保存学生基本信息，再上传头像）
 export const uploadStudentAvatar = (id, formData) =>
   request.post(`/students/${id}/avatar`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+// 教师头像上传
+export const uploadTeacherAvatar = (formData) =>
+  request.post('/teacher/avatar', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 
 // ================= 成绩管理 =================
 export const getScores = () => request.get('/scores')

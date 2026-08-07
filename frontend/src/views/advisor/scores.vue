@@ -7,7 +7,7 @@
       show-icon
       class="mb-16"
       :title="analyzedExams.length
-        ? `已加入分析的 ${analyzedExams.length} 场试卷已同步到下方「考试名称」筛选与录入选项：${analyzedExams.join('、')}`
+        ? `已关联 ${analyzedExams.length} 场试卷参与分析：${analyzedExams.join('、')}（在「试卷管理」取消加入后，将不再出现在本页，也不参与分析）`
         : '暂无试卷加入分析，请在「试卷管理」中点击「加入分析」标记要分析的考试'"
     />
 
@@ -356,29 +356,32 @@ const filterForm = ref({
 const trendChartRef = ref(null)
 let trendChartInstance = null
 
-// 考试名称选项：已加入分析的试卷优先，其次是有成绩数据的考试
-// 每个选项带「是否已加入分析」标记与成绩条数，让关联一目了然
+// 考试名称选项：仅来自试卷管理中「已加入分析」的试卷，取消分析后即从下拉框消失
+// 每个选项带成绩条数，让关联一目了然
 const examOptions = computed(() => {
   const countMap = {}
   scores.value.forEach(s => {
     if (s.exam_name) countMap[s.exam_name] = (countMap[s.exam_name] || 0) + 1
   })
-  const options = []
-  const seen = new Set()
-  allExams.value.forEach(e => {
-    if (e.analyze === 1 && e.title && !seen.has(e.title)) {
-      seen.add(e.title)
-      options.push({ name: e.title, analyzed: true, count: countMap[e.title] || 0, exam: e })
-    }
+  return allExams.value
+    .filter(e => e.analyze === 1 && e.title)
+    .map(e => ({ name: e.title, analyzed: true, count: countMap[e.title] || 0, exam: e }))
+})
+
+// 已加入分析的试卷标题集合
+const analyzedNames = computed(() => new Set(allExams.value.filter(e => e.analyze === 1).map(e => e.title)))
+
+// 分析数据源：仅包含已加入分析试卷的成绩（未加入分析的考试不参与统计/图表/学生分析）
+const analyzedScores = computed(() => scores.value.filter(s => analyzedNames.value.has(s.exam_name)))
+
+// 分析用筛选结果（考试名称/科目/学生）
+const filteredAnalysis = computed(() => {
+  return analyzedScores.value.filter(s => {
+    if (filterForm.value.exam_name && s.exam_name !== filterForm.value.exam_name) return false
+    if (filterForm.value.subject && s.subject !== filterForm.value.subject) return false
+    if (filterForm.value.student_ids.length > 0 && !filterForm.value.student_ids.includes(s.student_id)) return false
+    return true
   })
-  Object.keys(countMap).sort().forEach(name => {
-    if (!seen.has(name)) {
-      seen.add(name)
-      const e = allExams.value.find(x => x.title === name)
-      options.push({ name, analyzed: false, count: countMap[name], exam: e || null })
-    }
-  })
-  return options
 })
 
 // 当前所选考试与试卷管理的关联信息（仅当选中的考试确实来自试卷管理且已加入分析时展示）
@@ -397,9 +400,9 @@ const selectedExam = computed(() => {
 
 const formatDate = (d) => (d ? String(d).slice(0, 10) : '—')
 
-// 获取所有科目（去重）
+// 获取所有科目（去重，基于已加入分析试卷的成绩）
 const subjects = computed(() => {
-  const subjs = new Set(scores.value.map(s => s.subject).filter(Boolean))
+  const subjs = new Set(analyzedScores.value.map(s => s.subject).filter(Boolean))
   return Array.from(subjs).sort()
 })
 
@@ -413,9 +416,9 @@ const filteredScores = computed(() => {
   })
 })
 
-// 班级统计
+// 班级统计（仅统计已加入分析试卷的成绩）
 const classStats = computed(() => {
-  const data = filteredScores.value
+  const data = filteredAnalysis.value
   if (data.length === 0) {
     return { studentCount: 0, avgScore: '—', maxScore: '—', minScore: '—' }
   }
@@ -434,7 +437,7 @@ const classStats = computed(() => {
 
 // 应用筛选
 const applyFilter = () => {
-  buildAnalysis(filteredScores.value)
+  buildAnalysis(filteredAnalysis.value)
   currentPage.value = 1
   nextTick(() => {
     renderChart()
@@ -472,7 +475,7 @@ const renderChart = () => {
   }
   // 计算各分数段人数
   const ranges = { '90-100': 0, '80-89': 0, '70-79': 0, '60-69': 0, '0-59': 0 }
-  filteredScores.value.forEach(s => {
+  filteredAnalysis.value.forEach(s => {
     const score = Number(s.score)
     if (score >= 90) ranges['90-100']++
     else if (score >= 80) ranges['80-89']++
@@ -507,7 +510,7 @@ const renderTrendChart = () => {
   
   // 按考试名称分组，计算每次考试的平均分
   const examGroups = {}
-  filteredScores.value.forEach(s => {
+  filteredAnalysis.value.forEach(s => {
     if (!examGroups[s.exam_name]) {
       examGroups[s.exam_name] = []
     }
@@ -642,7 +645,7 @@ const loadData = async () => {
     students.value = studentRows
     allExams.value = examRows || []
     analyzedExams.value = allExams.value.filter(e => e.analyze === 1).map(e => e.title)
-    buildAnalysis(scoreRows)
+    buildAnalysis(analyzedScores.value)
     // 数据加载完成后重置分页并渲染图表
     currentPage.value = 1
     nextTick(() => {

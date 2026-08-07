@@ -41,8 +41,8 @@
         <el-table-column prop="id" label="学号" width="80" />
         <el-table-column label="头像" width="70" align="center">
           <template #default="scope">
-            <el-avatar :size="36" :src="scope.row.avatar ? `/uploads/${scope.row.avatar}` : undefined">
-              {{ scope.row.name ? scope.row.name.slice(0, 1) : '' }}
+            <el-avatar :size="36" :src="avatarSrc(scope.row.avatar) || undefined">
+              {{ avatarText(scope.row.avatar) || (scope.row.name ? scope.row.name.slice(0, 1) : '') }}
             </el-avatar>
           </template>
         </el-table-column>
@@ -90,11 +90,11 @@
         <el-form-item label="头像">
           <div class="avatar-upload">
             <el-avatar
-              v-if="avatarPreview"
+              v-if="avatarPreview.src || avatarPreview.text"
               :size="64"
-              :src="avatarPreview"
+              :src="avatarPreview.src || undefined"
               class="avatar-preview"
-            >{{ form.name ? form.name.slice(0, 1) : '' }}</el-avatar>
+            >{{ avatarPreview.text }}</el-avatar>
             <el-upload
               ref="avatarUploadRef"
               :auto-upload="false"
@@ -105,11 +105,23 @@
               :on-remove="onAvatarRemove"
             >
               <el-button type="primary" plain>
-                <el-icon><Upload /></el-icon>选择头像
+                <el-icon><Upload /></el-icon>上传头像
               </el-button>
             </el-upload>
           </div>
-          <div class="form-tip" v-if="avatarFile">已选择新头像，保存后生效</div>
+          <div class="avatar-grid">
+            <div
+              v-for="a in BUILTIN_AVATARS"
+              :key="a.emoji"
+              class="avatar-opt"
+              :class="{ active: form.avatar === 'emoji:' + a.emoji }"
+              @click="pickEmoji(a)"
+            >
+              <el-avatar :size="40">{{ a.emoji }}</el-avatar>
+              <span class="avatar-opt-name">{{ a.name }}</span>
+            </div>
+          </div>
+          <div class="form-tip" v-if="avatarFile">已选择上传头像，保存后生效</div>
         </el-form-item>
         <el-form-item label="姓名" prop="name" required>
           <el-input v-model="form.name" placeholder="请输入姓名" />
@@ -202,8 +214,8 @@
 
     <el-dialog v-model="detailVisible" title="学生档案详情" width="640px">
       <div class="detail-header" v-if="detail">
-        <el-avatar :size="64" :src="detail.avatar ? `/uploads/${detail.avatar}` : undefined">
-          {{ detail.name ? detail.name.slice(0, 1) : '' }}
+        <el-avatar :size="64" :src="avatarSrc(detail.avatar) || undefined">
+          {{ avatarText(detail.avatar) || (detail.name ? detail.name.slice(0, 1) : '') }}
         </el-avatar>
       </div>
       <el-descriptions :column="2" border v-if="detail">
@@ -281,16 +293,50 @@ const form = ref({
   class: '',
   is_special: 0,
   special_type: '',
-  remark: ''
+  remark: '',
+  avatar: ''
 })
+
+// 内置卡通头像：选择后存储为 emoji:xxx，上传头像存储为文件名
+const BUILTIN_AVATARS = [
+  { name: '小猫咪', emoji: '🐱' },
+  { name: '小狗狗', emoji: '🐶' },
+  { name: '大熊猫', emoji: '🐼' },
+  { name: '小兔子', emoji: '🐰' },
+  { name: '棕小熊', emoji: '🐻' },
+  { name: '小狐狸', emoji: '🦊' },
+  { name: '小老虎', emoji: '🐯' },
+  { name: '小狮子', emoji: '🦁' },
+  { name: '小青蛙', emoji: '🐸' },
+  { name: '小企鹅', emoji: '🐧' },
+  { name: '独角兽', emoji: '🦄' },
+  { name: '小考拉', emoji: '🐨' }
+]
+
+const isEmojiAvatar = (v) => v && v.startsWith('emoji:')
+// 上传头像的图片地址（卡通头像返回空，走文字渲染）
+const avatarSrc = (v) => (v && !isEmojiAvatar(v) ? `/uploads/${v}` : '')
+// 卡通头像的 emoji 字符（上传头像返回空）
+const avatarText = (v) => (isEmojiAvatar(v) ? v.slice(6) : '')
 
 // 头像上传相关：avatarFile 为新选择的文件，avatarPreview 为预览地址
 const avatarUploadRef = ref()
 const avatarFile = ref(null)
 const avatarPreviewUrl = ref('')
 const avatarPreview = computed(() => {
-  return avatarPreviewUrl.value || (form.value.avatar ? `/uploads/${form.value.avatar}` : '')
+  if (avatarPreviewUrl.value) return { src: avatarPreviewUrl.value, text: '' }
+  const a = form.value.avatar
+  if (isEmojiAvatar(a)) return { src: '', text: a.slice(6) }
+  return { src: a ? `/uploads/${a}` : '', text: form.value.name ? form.value.name.slice(0, 1) : '' }
 })
+
+// 选择卡通头像
+const pickEmoji = (a) => {
+  form.value.avatar = 'emoji:' + a.emoji
+  avatarFile.value = null
+  avatarPreviewUrl.value = ''
+  if (avatarUploadRef.value) avatarUploadRef.value.clearFiles()
+}
 
 // 学生表单校验规则
 const studentRules = {
@@ -323,7 +369,8 @@ const resetForm = () => {
     class: '',
     is_special: 0,
     special_type: '',
-    remark: ''
+    remark: '',
+    avatar: ''
   }
   avatarFile.value = null
   avatarPreviewUrl.value = ''
@@ -518,6 +565,35 @@ onMounted(loadStudents)
 }
 .avatar-preview {
   flex-shrink: 0;
+}
+.avatar-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.avatar-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.avatar-opt:hover {
+  background: #f5f7fa;
+}
+.avatar-opt.active {
+  border-color: #409eff;
+  background: #f0f7ff;
+}
+.avatar-opt-name {
+  font-size: 11px;
+  color: #606266;
+  white-space: nowrap;
 }
 .form-tip {
   font-size: 12px;

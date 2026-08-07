@@ -107,8 +107,13 @@
           </span>
         </div>
         <div class="header-right">
-          <el-avatar :size="32" src="https://cube.elemecdn.com/3/7c/3ea6beec64369c2642b92c6726f1epng.png" />
-          <span class="username" @click="openEditDialog" style="cursor: pointer;" title="点击修改教师名称">{{ teacherName }}</span>
+          <el-avatar
+            :size="32"
+            :src="teacherAvatarSrc || undefined"
+            class="header-avatar"
+            @click="openEditDialog"
+          >{{ teacherAvatarEmoji || (teacherName ? teacherName.slice(0, 1) : '') }}</el-avatar>
+          <span class="username" @click="openEditDialog" style="cursor: pointer;" title="点击修改个人信息">{{ teacherName }}</span>
           <el-button text type="primary" :icon="Key" @click="openPasswordDialog">修改密码</el-button>
           <el-button text type="danger" :icon="SwitchButton" @click="handleLogout">退出登录</el-button>
         </div>
@@ -123,16 +128,52 @@
       </el-main>
     </el-container>
 
-    <!-- 编辑教师名称对话框 -->
-    <el-dialog v-model="showEditDialog" title="修改教师名称" width="400px">
+    <!-- 个人信息对话框（教师名称 + 头像：卡通选择或上传） -->
+    <el-dialog v-model="showEditDialog" title="个人信息" width="480px">
       <el-form :model="editForm" label-width="100px">
+        <el-form-item label="教师头像">
+          <div class="avatar-upload">
+            <el-avatar
+              v-if="teacherAvatarPreview.src || teacherAvatarPreview.text"
+              :size="64"
+              :src="teacherAvatarPreview.src || undefined"
+              class="avatar-preview"
+            >{{ teacherAvatarPreview.text }}</el-avatar>
+            <el-upload
+              ref="teacherAvatarUploadRef"
+              :auto-upload="false"
+              :limit="1"
+              accept="image/*"
+              :show-file-list="false"
+              :on-change="onTeacherAvatarChange"
+              :on-remove="onTeacherAvatarRemove"
+            >
+              <el-button type="primary" plain>
+                <el-icon><Upload /></el-icon>上传头像
+              </el-button>
+            </el-upload>
+          </div>
+          <div class="avatar-grid">
+            <div
+              v-for="a in BUILTIN_AVATARS"
+              :key="a.emoji"
+              class="avatar-opt"
+              :class="{ active: editForm.teacherAvatar === 'emoji:' + a.emoji }"
+              @click="pickTeacherEmoji(a)"
+            >
+              <el-avatar :size="40">{{ a.emoji }}</el-avatar>
+              <span class="avatar-opt-name">{{ a.name }}</span>
+            </div>
+          </div>
+          <div class="form-tip" v-if="teacherAvatarFile">已选择上传头像，保存后生效</div>
+        </el-form-item>
         <el-form-item label="教师名称">
           <el-input v-model="editForm.teacherName" placeholder="请输入教师名称" />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showEditDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveTeacherInfo">保存</el-button>
+        <el-button type="primary" :loading="teacherSaving" @click="saveTeacherInfo">保存</el-button>
       </template>
     </el-dialog>
 
@@ -183,8 +224,8 @@
 <script setup>
 import { ref, computed, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Key, SwitchButton } from '@element-plus/icons-vue'
-import { getSettings, updateSetting, getGradeInfo, updateGradeYear, changePassword } from '../api'
+import { Key, SwitchButton, Upload } from '@element-plus/icons-vue'
+import { getSettings, updateSetting, getGradeInfo, updateGradeYear, changePassword, uploadTeacherAvatar } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
@@ -194,8 +235,60 @@ const pageTitle = computed(() => route.meta.title || '工作台')
 
 // 教师信息
 const teacherName = ref('陈老师')
+const teacherAvatar = ref('')
 const showEditDialog = ref(false)
-const editForm = ref({ teacherName: '' })
+const teacherSaving = ref(false)
+const editForm = ref({ teacherName: '', teacherAvatar: '' })
+
+// 内置卡通头像：选择后存储为 emoji:xxx，上传头像存储为文件名
+const BUILTIN_AVATARS = [
+  { name: '小猫咪', emoji: '🐱' },
+  { name: '小狗狗', emoji: '🐶' },
+  { name: '大熊猫', emoji: '🐼' },
+  { name: '小兔子', emoji: '🐰' },
+  { name: '棕小熊', emoji: '🐻' },
+  { name: '小狐狸', emoji: '🦊' },
+  { name: '小老虎', emoji: '🐯' },
+  { name: '小狮子', emoji: '🦁' },
+  { name: '小青蛙', emoji: '🐸' },
+  { name: '小企鹅', emoji: '🐧' },
+  { name: '独角兽', emoji: '🦄' },
+  { name: '小考拉', emoji: '🐨' }
+]
+
+const isEmojiAvatar = (v) => v && v.startsWith('emoji:')
+// 顶部栏头像：上传的图片地址（卡通头像返回空，走文字渲染）
+const teacherAvatarSrc = computed(() =>
+  teacherAvatar.value && !isEmojiAvatar(teacherAvatar.value) ? `/uploads/${teacherAvatar.value}` : ''
+)
+// 顶部栏头像：卡通 emoji 字符（上传头像返回空）
+const teacherAvatarEmoji = computed(() => (isEmojiAvatar(teacherAvatar.value) ? teacherAvatar.value.slice(6) : ''))
+
+// 个人信息弹窗：头像预览与上传状态
+const teacherAvatarUploadRef = ref()
+const teacherAvatarFile = ref(null)
+const teacherAvatarPreviewUrl = ref('')
+const teacherAvatarPreview = computed(() => {
+  if (teacherAvatarPreviewUrl.value) return { src: teacherAvatarPreviewUrl.value, text: '' }
+  const a = editForm.value.teacherAvatar
+  if (isEmojiAvatar(a)) return { src: '', text: a.slice(6) }
+  return { src: a ? `/uploads/${a}` : '', text: editForm.value.teacherName ? editForm.value.teacherName.slice(0, 1) : '' }
+})
+const onTeacherAvatarChange = (file) => {
+  teacherAvatarFile.value = file.raw
+  teacherAvatarPreviewUrl.value = URL.createObjectURL(file.raw)
+}
+const onTeacherAvatarRemove = () => {
+  teacherAvatarFile.value = null
+  teacherAvatarPreviewUrl.value = ''
+}
+// 选择卡通头像
+const pickTeacherEmoji = (a) => {
+  editForm.value.teacherAvatar = 'emoji:' + a.emoji
+  teacherAvatarFile.value = null
+  teacherAvatarPreviewUrl.value = ''
+  if (teacherAvatarUploadRef.value) teacherAvatarUploadRef.value.clearFiles()
+}
 
 // 当前日期与星期（每分钟自动刷新，跨天时保持准确）
 const currentDateText = ref('')
@@ -218,6 +311,9 @@ const loadTeacherInfo = async () => {
     const res = await getSettings()
     if (res && res.teacher_name) {
       teacherName.value = res.teacher_name
+    }
+    if (res && res.teacher_avatar) {
+      teacherAvatar.value = res.teacher_avatar
     }
   } catch (err) {
     console.error('加载教师信息失败:', err)
@@ -260,25 +356,41 @@ const saveGradeYear = async () => {
   }
 }
 
-// 保存教师信息
+// 保存教师信息（名称 + 头像：选中的卡通或新上传的文件）
 const saveTeacherInfo = async () => {
   if (!editForm.value.teacherName.trim()) {
     ElMessage.warning('教师名称不能为空')
     return
   }
+  teacherSaving.value = true
   try {
     await updateSetting('teacher_name', editForm.value.teacherName.trim())
     teacherName.value = editForm.value.teacherName.trim()
+    let avatarVal = editForm.value.teacherAvatar || ''
+    if (teacherAvatarFile.value) {
+      const fd = new FormData()
+      fd.append('avatar', teacherAvatarFile.value)
+      const res = await uploadTeacherAvatar(fd)
+      avatarVal = res.avatar
+    }
+    await updateSetting('teacher_avatar', avatarVal)
+    teacherAvatar.value = avatarVal
     ElMessage.success('保存成功')
     showEditDialog.value = false
   } catch (err) {
     ElMessage.error('保存失败')
+  } finally {
+    teacherSaving.value = false
   }
 }
 
-// 打开编辑对话框
+// 打开个人信息对话框
 const openEditDialog = () => {
   editForm.value.teacherName = teacherName.value
+  editForm.value.teacherAvatar = teacherAvatar.value
+  teacherAvatarFile.value = null
+  teacherAvatarPreviewUrl.value = ''
+  if (teacherAvatarUploadRef.value) teacherAvatarUploadRef.value.clearFiles()
   showEditDialog.value = true
 }
 
@@ -426,6 +538,54 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.header-avatar {
+  cursor: pointer;
+}
+
+/* 个人信息弹窗：头像上传与卡通选择 */
+.avatar-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.avatar-preview {
+  flex-shrink: 0;
+}
+.avatar-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.avatar-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.avatar-opt:hover {
+  background: #f5f7fa;
+}
+.avatar-opt.active {
+  border-color: #409eff;
+  background: #f0f7ff;
+}
+.avatar-opt-name {
+  font-size: 11px;
+  color: #606266;
+  white-space: nowrap;
+}
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
 }
 
 .username {

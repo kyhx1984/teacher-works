@@ -82,17 +82,17 @@ router.post('/students/import', upload.single('file'), async (req, res) => {
   }
 });
 
-// POST /students - 新增学生（支持备注 remark）
+// POST /students - 新增学生（支持备注 remark 与头像 avatar）
 router.post('/students', async (req, res) => {
   try {
-    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark } = req.body;
+    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark, avatar } = req.body;
     if (!name) return sendResponse(res, null, '学生姓名不能为空', 400);
     const db = await getDb();
     const result = await db.run(
-      `INSERT INTO students (name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO students (name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark, avatar)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [name, gender || '', birth || '', parent_name || '', phone || '', family_info || '', address || '',
-       is_special ? 1 : 0, special_type || '', remark || null]
+       is_special ? 1 : 0, special_type || '', remark || null, avatar || null]
     );
     sendResponse(res, { id: result.lastID });
   } catch (err) {
@@ -100,18 +100,18 @@ router.post('/students', async (req, res) => {
   }
 });
 
-// PUT /students/:id - 更新学生（支持备注 remark）
+// PUT /students/:id - 更新学生（支持备注 remark 与头像 avatar）
 router.put('/students/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark } = req.body;
+    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark, avatar } = req.body;
     const db = await getDb();
     const existing = await db.get('SELECT id FROM students WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '学生不存在', 404);
     await db.run(
-      `UPDATE students SET name=?, gender=?, birth=?, parent_name=?, phone=?, family_info=?, address=?, is_special=?, special_type=?, remark=? WHERE id=?`,
+      `UPDATE students SET name=?, gender=?, birth=?, parent_name=?, phone=?, family_info=?, address=?, is_special=?, special_type=?, remark=?, avatar=? WHERE id=?`,
       [name, gender || '', birth || '', parent_name || '', phone || '', family_info || '', address || '',
-       is_special ? 1 : 0, special_type || '', remark || null, id]
+       is_special ? 1 : 0, special_type || '', remark || null, avatar || null, id]
     );
     sendResponse(res, { id });
   } catch (err) {
@@ -135,6 +135,26 @@ router.post('/students/:id/avatar', leaveImageUpload.single('avatar'), async (re
       }
     }
     await db.run('UPDATE students SET avatar = ? WHERE id = ?', [req.file.filename, id]);
+    sendResponse(res, { avatar: req.file.filename });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// POST /teacher/avatar - 上传教师头像（保存到 uploads/ 目录，更新 settings.teacher_avatar）
+router.post('/teacher/avatar', leaveImageUpload.single('avatar'), async (req, res) => {
+  try {
+    if (!req.file) return sendResponse(res, null, '未上传头像文件', 400);
+    const db = await getDb();
+    // 删除旧头像文件（卡通头像为 emoji: 前缀，跳过）
+    const old = await db.get("SELECT value FROM settings WHERE key = 'teacher_avatar'");
+    if (old && old.value && !old.value.startsWith('emoji:')) {
+      const oldPath = path.join(__dirname, '..', 'uploads', old.value);
+      if (fs.existsSync(oldPath)) {
+        try { fs.unlinkSync(oldPath); } catch (e) { /* 忽略删除失败 */ }
+      }
+    }
+    await setSetting(db, 'teacher_avatar', req.file.filename);
     sendResponse(res, { avatar: req.file.filename });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -242,16 +262,13 @@ router.post('/scores/import', upload.single('file'), async (req, res) => {
     const db = await getDb();
     let imported = 0;
 
+    // 导入的成绩写入数据库
     for (const row of data) {
       if (!row.student_id || !row.subject || row.score === undefined) continue;
       await db.run(
         'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
         [row.student_id, row.subject, row.score, row.exam_name || '期中考试']
       );
-      // 导入的成绩名称与试卷标题一致时，自动标记为「加入分析」
-      try {
-        await db.run('UPDATE exams SET analyze = 1 WHERE title = ? AND analyze = 0', [row.exam_name || '期中考试']);
-      } catch (e) {}
       imported++;
     }
 
@@ -273,12 +290,6 @@ router.post('/scores', async (req, res) => {
       'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
       [student_id, subject, score, exam_name || '期中考试']
     );
-    // 考试名称与试卷管理中的试卷标题一致时，自动标记为「加入分析」，录入成绩即建立关联
-    try {
-      await db.run('UPDATE exams SET analyze = 1 WHERE title = ? AND analyze = 0', [exam_name || '期中考试']);
-    } catch (e) {
-      console.error('auto-analyze failed:', e && e.message);
-    }
     sendResponse(res, { id: result.lastID });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -297,10 +308,6 @@ router.put('/scores/:id', async (req, res) => {
       'UPDATE scores SET student_id=?, subject=?, score=?, exam_name=? WHERE id=?',
       [student_id, subject, score, exam_name, id]
     );
-    // 更新后的考试名称与试卷标题一致时，自动标记为「加入分析」
-    try {
-      await db.run('UPDATE exams SET analyze = 1 WHERE title = ? AND analyze = 0', [exam_name || '期中考试']);
-    } catch (e) {}
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
