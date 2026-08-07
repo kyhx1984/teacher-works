@@ -197,6 +197,9 @@
           <el-tag size="small">{{ currentExam.type }}</el-tag>
         </div>
         <div class="records-actions">
+          <el-button type="primary" size="small" @click="openAddStudent">
+            <el-icon><Plus /></el-icon>添加学生
+          </el-button>
           <el-button type="success" size="small" @click="exportTemplate(currentExam.id)">
             <el-icon><Download /></el-icon>导出模板
           </el-button>
@@ -237,12 +240,31 @@
             <span v-else class="text-muted">无</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="160" fixed="right">
           <template #default="scope">
             <el-button link type="primary" size="small" @click="editRecord(scope.row)">编辑</el-button>
+            <el-popconfirm title="删除该学生的考试记录？" @confirm="removeRecord(scope.row)">
+              <template #reference>
+                <el-button link type="danger" size="small">删除</el-button>
+              </template>
+            </el-popconfirm>
           </template>
         </el-table-column>
       </el-table>
+    </el-dialog>
+
+    <!-- 添加学生到考试记录对话框 -->
+    <el-dialog v-model="addStudentVisible" title="添加学生到考试记录" width="420px">
+      <el-select v-model="addStudentId" placeholder="选择未记录的学生" filterable style="width: 100%">
+        <el-option v-for="s in addStudentOptions" :key="s.id" :label="s.name" :value="s.id" />
+      </el-select>
+      <div class="form-tip" style="margin-top: 8px">仅显示尚未包含在本次考试记录中的学生</div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="addStudentVisible = false">取消</el-button>
+          <el-button type="primary" :loading="addStudentSaving" @click="handleAddStudent">确定</el-button>
+        </span>
+      </template>
     </el-dialog>
 
     <!-- 编辑考试记录对话框 -->
@@ -342,8 +364,9 @@ import { ElMessage } from 'element-plus'
 import {
   getExams, createExam, updateExam, deleteExam,
   getResources, getResourceCategories,
-  getExamRecords, createExamRecord, updateExamRecord,
-  exportExamTemplate, importExamRecords
+  getExamRecords, createExamRecord, updateExamRecord, deleteExamRecord,
+  exportExamTemplate, importExamRecords,
+  getStudents
 } from '../../api'
 
 const loading = ref(false)
@@ -368,6 +391,12 @@ const recordsVisible = ref(false)
 const recordsLoading = ref(false)
 const currentExam = ref({})
 const examRecords = ref([])
+
+// 添加学生到考试记录
+const addStudentVisible = ref(false)
+const addStudentSaving = ref(false)
+const addStudentId = ref(null)
+const addStudentOptions = ref([])
 
 // 编辑记录对话框
 const recordDialogVisible = ref(false)
@@ -599,11 +628,11 @@ const downloadResource = (row) => {
   window.open(url, '_blank')
 }
 
-// 生成学生考试记录
+// 生成/补齐学生考试记录（已有记录不重复生成，新学生可随时补齐）
 const generateRecords = async (exam) => {
   try {
-    await createExamRecord({ exam_id: exam.id })
-    ElMessage.success('已为所有学生生成考试记录')
+    const res = await createExamRecord({ exam_id: exam.id })
+    ElMessage.success(res && res.inserted ? `已补齐 ${res.inserted} 名学生考试记录` : '所有学生都已包含在考试记录中')
     viewRecords(exam)
   } catch (e) {
     // 拦截器已提示
@@ -621,6 +650,53 @@ const viewRecords = async (exam) => {
     // 拦截器已提示
   } finally {
     recordsLoading.value = false
+  }
+}
+
+// 打开添加学生对话框（仅列出未包含在学生记录中的学生）
+const openAddStudent = async () => {
+  try {
+    const allStudents = await getStudents()
+    const recordedIds = new Set(examRecords.value.map(r => r.student_id))
+    addStudentOptions.value = allStudents.filter(s => !recordedIds.has(s.id))
+    addStudentId.value = null
+    if (!addStudentOptions.value.length) {
+      ElMessage.info('所有学生都已包含在考试记录中')
+      return
+    }
+    addStudentVisible.value = true
+  } catch (e) {
+    // 拦截器已提示
+  }
+}
+
+// 添加单个学生到考试记录
+const handleAddStudent = async () => {
+  if (!addStudentId.value) {
+    ElMessage.warning('请选择学生')
+    return
+  }
+  addStudentSaving.value = true
+  try {
+    await createExamRecord({ exam_id: currentExam.value.id, student_id: addStudentId.value })
+    ElMessage.success('已添加学生')
+    addStudentVisible.value = false
+    viewRecords(currentExam.value)
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    addStudentSaving.value = false
+  }
+}
+
+// 删除单条考试记录（同步删除成绩分析中对应成绩）
+const removeRecord = async (record) => {
+  try {
+    await deleteExamRecord(record.id)
+    ElMessage.success('已删除考试记录')
+    viewRecords(currentExam.value)
+  } catch (e) {
+    // 拦截器已提示
   }
 }
 

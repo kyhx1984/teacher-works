@@ -33,6 +33,17 @@ const sendResponse = (res, data = {}, message = 'success', code = 200) => {
 
 // ================= STUDENTS =================
 
+// 为已有考试记录的试卷补充该学生的考试记录（成绩为空），保证学生档案与试卷管理保持一致
+async function fillMissingExamRecords(db, studentId) {
+  const examRows = await db.all('SELECT DISTINCT exam_id FROM exam_records');
+  for (const row of examRows) {
+    await db.run(
+      'INSERT INTO exam_records (exam_id, student_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM exam_records WHERE exam_id = ? AND student_id = ?)',
+      [row.exam_id, studentId, row.exam_id, studentId]
+    );
+  }
+}
+
 // GET /students - 学生列表
 router.get('/students', async (req, res) => {
   try {
@@ -58,7 +69,7 @@ router.post('/students/import', upload.single('file'), async (req, res) => {
     
     for (const row of data) {
       if (!row.name) continue; // skip empty rows
-      await db.run(
+      const result = await db.run(
         `INSERT INTO students (name, gender, birth, parent_name, phone, family_info, address, is_special, special_type)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -73,6 +84,8 @@ router.post('/students/import', upload.single('file'), async (req, res) => {
           row.special_type || ''
         ]
       );
+      // 同步：为已有考试记录的试卷补充该学生的考试记录
+      await fillMissingExamRecords(db, result.lastID);
       imported++;
     }
     
@@ -94,6 +107,8 @@ router.post('/students', async (req, res) => {
       [name, gender || '', birth || '', parent_name || '', phone || '', family_info || '', address || '',
        is_special ? 1 : 0, special_type || '', remark || null, avatar || null]
     );
+    // 同步：为已有考试记录的试卷补充该学生的考试记录
+    await fillMissingExamRecords(db, result.lastID);
     sendResponse(res, { id: result.lastID });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -171,6 +186,7 @@ router.delete('/students/batch', async (req, res) => {
     const db = await getDb();
     // 逐个删除，复用单条学生的级联删除逻辑
     for (const id of ids) {
+      await db.run('DELETE FROM exam_records WHERE student_id = ?', [id]);
       await db.run('DELETE FROM scores WHERE student_id = ?', [id]);
       await db.run('DELETE FROM points WHERE student_id = ?', [id]);
       await db.run('DELETE FROM leaves WHERE student_id = ?', [id]);
@@ -189,6 +205,8 @@ router.delete('/students/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const db = await getDb();
+    // 删除考试记录（试卷管理）与成绩分析中的成绩，保持数据一致
+    await db.run('DELETE FROM exam_records WHERE student_id = ?', [id]);
     await db.run('DELETE FROM scores WHERE student_id = ?', [id]);
     await db.run('DELETE FROM points WHERE student_id = ?', [id]);
     await db.run('DELETE FROM leaves WHERE student_id = ?', [id]);

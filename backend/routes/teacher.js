@@ -237,34 +237,39 @@ router.get('/exam-records', async (req, res) => {
   }
 });
 
-// POST /exam-records - 批量生成学生考试记录
+// POST /exam-records - 生成学生考试记录（补齐缺失学生；支持指定 student_id 添加单个学生）
 router.post('/exam-records', async (req, res) => {
   try {
-    const { exam_id } = req.body;
+    const { exam_id, student_id } = req.body;
     if (!exam_id) return sendResponse(res, null, 'exam_id 不能为空', 400);
     
     const db = await getDb();
     // 检查考试是否存在
     const exam = await db.get('SELECT id FROM exams WHERE id = ?', [exam_id]);
     if (!exam) return sendResponse(res, null, '考试不存在', 404);
-    
-    // 获取所有学生
-    const students = await db.all('SELECT id FROM students');
-    
-    // 检查是否已有记录
-    const existing = await db.get('SELECT COUNT(*) as count FROM exam_records WHERE exam_id = ?', [exam_id]);
-    if (existing.count > 0) {
-      return sendResponse(res, null, '该考试已有学生记录，请先删除旧记录', 400);
+
+    // 添加单个学生的考试记录（已存在则跳过）
+    if (student_id) {
+      await db.run(
+        'INSERT INTO exam_records (exam_id, student_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM exam_records WHERE exam_id = ? AND student_id = ?)',
+        [exam_id, student_id, exam_id, student_id]
+      );
+      sendResponse(res, { inserted: 1 });
+      return;
     }
     
-    // 批量插入
+    // 获取所有学生，仅补齐缺失的记录（重复点击不会报错、不会产生重复数据）
+    const students = await db.all('SELECT id FROM students');
     let inserted = 0;
     for (const student of students) {
-      await db.run(
-        'INSERT INTO exam_records (exam_id, student_id) VALUES (?, ?)',
-        [exam_id, student.id]
-      );
-      inserted++;
+      const existing = await db.get('SELECT id FROM exam_records WHERE exam_id = ? AND student_id = ?', [exam_id, student.id]);
+      if (!existing) {
+        await db.run(
+          'INSERT INTO exam_records (exam_id, student_id) VALUES (?, ?)',
+          [exam_id, student.id]
+        );
+        inserted++;
+      }
     }
     
     sendResponse(res, { inserted });
