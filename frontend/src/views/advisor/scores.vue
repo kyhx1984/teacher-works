@@ -7,7 +7,7 @@
       show-icon
       class="mb-16"
       :title="analyzedExams.length
-        ? `当前有 ${analyzedExams.length} 场试卷已加入分析：${analyzedExams.join('、')}`
+        ? `已加入分析的 ${analyzedExams.length} 场试卷已同步到下方「考试名称」筛选与录入选项：${analyzedExams.join('、')}`
         : '暂无试卷加入分析，请在「试卷管理」中点击「加入分析」标记要分析的考试'"
     />
 
@@ -152,6 +152,12 @@
         </div>
       </template>
       <el-table :data="pagedScores" style="width: 100%" v-loading="loading" @selection-change="handleSelectionChange">
+        <template #empty>
+          <div v-if="filterForm.exam_name" class="empty-tip">
+            该考试暂无成绩记录，请点击右上角「录入成绩」添加
+          </div>
+          <div v-else class="empty-tip">暂无成绩数据，请点击「Excel导入成绩」或「录入成绩」添加</div>
+        </template>
         <el-table-column type="selection" width="55" />
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="student_name" label="学生" width="110" />
@@ -234,7 +240,17 @@
           <el-input-number v-model="form.score" :min="0" :max="100" :precision="1" style="width: 100%" />
         </el-form-item>
         <el-form-item label="考试名称" prop="exam_name">
-          <el-input v-model="form.exam_name" placeholder="例如：期中考试" />
+          <el-select
+            v-model="form.exam_name"
+            placeholder="请选择考试，可输入新名称"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            style="width: 100%"
+          >
+            <el-option v-for="name in examNames" :key="name" :label="name" :value="name" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -290,14 +306,11 @@ const filterForm = ref({
 const trendChartRef = ref(null)
 let trendChartInstance = null
 
-// 获取所有考试名称（去重）
-// 优先展示已加入分析的试卷；若均已加入但暂无成绩数据，则回退展示全部考试名称
+// 获取所有考试名称（去重）：已加入分析的试卷优先，其次是有成绩数据的考试
+// 保证试卷管理中标记「加入分析」的考试一定出现在筛选与录入选项中
 const examNames = computed(() => {
   const names = new Set(scores.value.map(s => s.exam_name).filter(Boolean))
-  if (analyzedExams.value.length) {
-    const analyzedWithData = analyzedExams.value.filter(n => names.has(n))
-    if (analyzedWithData.length) return Array.from(analyzedWithData).sort()
-  }
+  analyzedExams.value.forEach(n => names.add(n))
   return Array.from(names).sort()
 })
 
@@ -581,14 +594,14 @@ const handleImport = async () => {
   }
 }
 
-// 打开录入对话框
+// 打开录入对话框（若已筛选考试名称则自动预填）
 const openCreate = () => {
   form.value = {
     id: null,
     student_id: null,
     subject: '',
     score: 0,
-    exam_name: ''
+    exam_name: filterForm.value.exam_name || ''
   }
   dialogVisible.value = true
   nextTick(() => {
@@ -775,6 +788,10 @@ onBeforeUnmount(() => {
 .score-badge {
   font-weight: bold;
   color: #409eff;
+}
+.empty-tip {
+  color: #909399;
+  font-size: 13px;
 }
 .avg-good { color: #67c23a; font-weight: bold; }
 .avg-mid { color: #409eff; }
