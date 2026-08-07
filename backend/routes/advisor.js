@@ -234,6 +234,24 @@ router.get('/students/:id', async (req, res) => {
 
 // ================= SCORES =================
 
+// 将成绩同步到试卷管理的考试记录（按考试名称匹配试卷，保留评语/备注/图片）
+// score 为空时仅清空对应考试记录的成绩，不删除记录
+async function syncExamRecord(db, studentId, examName, score) {
+  if (!studentId || !examName) return;
+  const exam = await db.get('SELECT id FROM exams WHERE title = ?', [examName]);
+  if (!exam) return;
+  const existing = await db.get('SELECT id FROM exam_records WHERE exam_id = ? AND student_id = ?', [exam.id, studentId]);
+  if (score !== null && score !== undefined && score !== '') {
+    if (existing) {
+      await db.run('UPDATE exam_records SET score = ? WHERE id = ?', [score, existing.id]);
+    } else {
+      await db.run('INSERT INTO exam_records (exam_id, student_id, score) VALUES (?, ?, ?)', [exam.id, studentId, score]);
+    }
+  } else if (existing) {
+    await db.run('UPDATE exam_records SET score = NULL WHERE id = ?', [existing.id]);
+  }
+}
+
 // GET /scores - 成绩列表与进退分析
 router.get('/scores', async (req, res) => {
   try {
@@ -262,13 +280,14 @@ router.post('/scores/import', upload.single('file'), async (req, res) => {
     const db = await getDb();
     let imported = 0;
 
-    // 导入的成绩写入数据库
+    // 导入的成绩写入数据库，并同步到试卷管理的考试记录
     for (const row of data) {
       if (!row.student_id || !row.subject || row.score === undefined) continue;
       await db.run(
         'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
         [row.student_id, row.subject, row.score, row.exam_name || '期中考试']
       );
+      await syncExamRecord(db, row.student_id, row.exam_name || '期中考试', row.score);
       imported++;
     }
 
@@ -278,7 +297,7 @@ router.post('/scores/import', upload.single('file'), async (req, res) => {
   }
 });
 
-// POST /scores - 单条成绩录入
+// POST /scores - 单条成绩录入（同步到试卷管理的考试记录）
 router.post('/scores', async (req, res) => {
   try {
     const { student_id, subject, score, exam_name } = req.body;
@@ -290,31 +309,35 @@ router.post('/scores', async (req, res) => {
       'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
       [student_id, subject, score, exam_name || '期中考试']
     );
+    await syncExamRecord(db, student_id, exam_name || '期中考试', score);
     sendResponse(res, { id: result.lastID });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
 });
 
-// PUT /scores/:id - 更新单条成绩
+// PUT /scores/:id - 更新单条成绩（同步到试卷管理的考试记录）
 router.put('/scores/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { student_id, subject, score, exam_name } = req.body;
     const db = await getDb();
-    const existing = await db.get('SELECT id FROM scores WHERE id = ?', [id]);
-    if (!existing) return sendResponse(res, null, '成绩记录不存在', 404);
+    const old = await db.get('SELECT student_id, exam_name FROM scores WHERE id = ?', [id]);
+    if (!old) return sendResponse(res, null, '成绩记录不存在', 404);
     await db.run(
       'UPDATE scores SET student_id=?, subject=?, score=?, exam_name=? WHERE id=?',
-      [student_id, subject, score, exam_name, id]
+      [student_id, subject, score, exam_name || '期中考试', id]
     );
+    // 同步考试记录：先清除旧考试下的成绩，再写入新考试/新成绩（防止考试名称变更后残留）
+    await syncExamRecord(db, old.student_id, old.exam_name, null);
+    await syncExamRecord(db, student_id, exam_name || '期中考试', score);
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
 });
 
-// DELETE /scores/batch - 批量删除成绩
+// DELETE /scores/batch - 批量删除成绩（同步删除试卷管理考试记录中对应成绩）
 // 请求体：{ ids: [1, 2, 3] }
 // 注意：必须放在 DELETE /scores/:id 之前，否则 "batch" 会被 :id 参数匹配
 router.delete('/scores/batch', async (req, res) => {
@@ -322,21 +345,29 @@ router.delete('/scores/batch', async (req, res) => {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
     if (!ids.length) return sendResponse(res, null, 'ids 不能为空', 400);
     const db = await getDb();
-    // 使用占位符列表批量删除
+    // 先取出待删记录（用于同步考试记录），再使用占位符列表批量删除
     const placeholders = ids.map(() => '?').join(',');
+    const rows = await db.all(`SELECT student_id, exam_name FROM scores WHERE id IN (${placeholders})`, ids);
     await db.run(`DELETE FROM scores WHERE id IN (${placeholders})`, ids);
+    for (const row of rows) {
+      await syncExamRecord(db, row.student_id, row.exam_name, null);
+    }
     sendResponse(res, { ids });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
 });
 
-// DELETE /scores/:id - 删除单条成绩
+// DELETE /scores/:id - 删除单条成绩（同步删除试卷管理考试记录中对应成绩）
 router.delete('/scores/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const db = await getDb();
+    const row = await db.get('SELECT student_id, exam_name FROM scores WHERE id = ?', [id]);
     await db.run('DELETE FROM scores WHERE id = ?', [id]);
+    if (row) {
+      await syncExamRecord(db, row.student_id, row.exam_name, null);
+    }
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);

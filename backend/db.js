@@ -273,6 +273,11 @@ async function initDb() {
     await db.run('ALTER TABLE exams ADD COLUMN analyze INTEGER DEFAULT 0');
   } catch (e) { /* analyze 列已存在，忽略 */ }
 
+  // 为已存在的 exams 表追加 subject 列（科目，用于成绩同步分析）
+  try {
+    await db.run('ALTER TABLE exams ADD COLUMN subject TEXT');
+  } catch (e) { /* subject 列已存在，忽略 */ }
+
   // 为已存在的 exam_records 表追加 image_path 列（考试记录图片，逗号分隔）
   try {
     await db.run('ALTER TABLE exam_records ADD COLUMN image_path TEXT');
@@ -323,6 +328,34 @@ async function initDb() {
   const existingGradeLevel = await db.get("SELECT key FROM settings WHERE key = 'grade_level'");
   if (!existingGradeLevel) {
     await db.run("INSERT INTO settings (key, value) VALUES ('grade_level', '一年级')");
+  }
+
+  // 数据一致性修复：试卷科目回填（标题包含科目词时自动推断）
+  const examRows = await db.all('SELECT id, title, subject FROM exams');
+  for (const exam of examRows) {
+    if (!exam.subject && exam.title) {
+      const subjectWords = ['语文', '数学', '英语', '科学', '道法', '体育', '音乐', '美术'];
+      const hit = subjectWords.find(w => exam.title.includes(w));
+      if (hit) {
+        await db.run('UPDATE exams SET subject = ? WHERE id = ?', [hit === '道法' ? '道德与法治' : hit, exam.id]);
+      }
+    }
+  }
+
+  // 数据一致性修复：以「考试记录」为权威，同步成绩分析数据（仅当试卷已有考试记录时覆盖，
+  // 避免误删仅在成绩分析中录入且未生成考试记录的成绩）
+  for (const exam of examRows) {
+    const countRow = await db.get('SELECT COUNT(*) AS c FROM exam_records WHERE exam_id = ?', [exam.id]);
+    if (countRow.c > 0 && exam.title) {
+      await db.run('DELETE FROM scores WHERE exam_name = ?', [exam.title]);
+      const records = await db.all('SELECT student_id, score FROM exam_records WHERE exam_id = ? AND score IS NOT NULL', [exam.id]);
+      for (const r of records) {
+        await db.run(
+          'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
+          [r.student_id, exam.subject || '综合', r.score, exam.title]
+        );
+      }
+    }
   }
 
   // 插入默认资源功能类别（仅首次初始化时）

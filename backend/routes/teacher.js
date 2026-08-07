@@ -157,15 +157,15 @@ router.get('/exams', async (req, res) => {
   }
 });
 
-// POST /exams - 新增试卷（支持关联资源、备注和加入分析标记）
+// POST /exams - 新增试卷（支持关联资源、科目、备注和加入分析标记）
 router.post('/exams', async (req, res) => {
   try {
-    const { title, type, content, resource_id, remark, analyze } = req.body;
+    const { title, type, subject, content, resource_id, remark, analyze } = req.body;
     const db = await getDb();
     const contentStr = typeof content === 'object' ? JSON.stringify(content) : content;
     const result = await db.run(
-      'INSERT INTO exams (title, type, content, resource_id, remark, analyze) VALUES (?, ?, ?, ?, ?, ?)',
-      [title, type, contentStr, resource_id || null, remark || null, analyze ? 1 : 0]
+      'INSERT INTO exams (title, type, subject, content, resource_id, remark, analyze) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [title, type, subject || null, contentStr, resource_id || null, remark || null, analyze ? 1 : 0]
     );
     sendResponse(res, { id: result.lastID });
   } catch (err) {
@@ -177,14 +177,14 @@ router.post('/exams', async (req, res) => {
 router.put('/exams/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, type, content, resource_id, remark, analyze } = req.body;
+    const { title, type, subject, content, resource_id, remark, analyze } = req.body;
     const db = await getDb();
     const existing = await db.get('SELECT id FROM exams WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '试卷不存在', 404);
     const contentStr = typeof content === 'object' ? JSON.stringify(content) : content;
     await db.run(
-      'UPDATE exams SET title=?, type=?, content=?, resource_id=?, remark=?, analyze=? WHERE id=?',
-      [title, type, contentStr, resource_id || null, remark || null, analyze ? 1 : 0, id]
+      'UPDATE exams SET title=?, type=?, subject=?, content=?, resource_id=?, remark=?, analyze=? WHERE id=?',
+      [title, type, subject || null, contentStr, resource_id || null, remark || null, analyze ? 1 : 0, id]
     );
     sendResponse(res, { id });
   } catch (err) {
@@ -192,14 +192,19 @@ router.put('/exams/:id', async (req, res) => {
   }
 });
 
-// DELETE /exams/:id - 删除试卷（级联删除 exam_records）
+// DELETE /exams/:id - 删除试卷（级联删除 exam_records 与 scores 中该试卷成绩）
 router.delete('/exams/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const db = await getDb();
+    const exam = await db.get('SELECT title FROM exams WHERE id = ?', [id]);
     // 先删除关联的考试记录
     await db.run('DELETE FROM exam_records WHERE exam_id = ?', [id]);
     await db.run('DELETE FROM exams WHERE id = ?', [id]);
+    // 同步删除成绩分析中该试卷名的成绩，保持数据一致
+    if (exam && exam.title) {
+      await db.run('DELETE FROM scores WHERE exam_name = ?', [exam.title]);
+    }
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -300,18 +305,42 @@ router.put('/exam-records/:id', upload.array('images', 6), async (req, res) => {
       'UPDATE exam_records SET score=?, comment=?, remark=?, image_path=? WHERE id=?',
       [score !== undefined ? score : null, comment || null, remark || null, image_path, id]
     );
+
+    // 成绩变更后同步到成绩分析（scores 表），保持两处数据一致
+    const record = await db.get(
+      'SELECT er.student_id, er.score, e.title AS exam_title, e.subject AS exam_subject FROM exam_records er LEFT JOIN exams e ON er.exam_id = e.id WHERE er.id = ?',
+      [id]
+    );
+    if (record && record.exam_title) {
+      await db.run('DELETE FROM scores WHERE exam_name = ? AND student_id = ?', [record.exam_title, record.student_id]);
+      if (record.score !== null && record.score !== undefined && record.score !== '') {
+        const existSubject = await db.get('SELECT subject FROM scores WHERE exam_name = ? AND subject IS NOT NULL AND subject != ? LIMIT 1', [record.exam_title, '']);
+        const subject = record.exam_subject || (existSubject ? existSubject.subject : '综合');
+        await db.run(
+          'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
+          [record.student_id, subject, record.score, record.exam_title]
+        );
+      }
+    }
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
 });
 
-// DELETE /exam-records/:id - 删除单条考试记录
+// DELETE /exam-records/:id - 删除单条考试记录（同步删除成绩分析中对应成绩）
 router.delete('/exam-records/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const db = await getDb();
+    const record = await db.get(
+      'SELECT er.student_id, e.title AS exam_title FROM exam_records er LEFT JOIN exams e ON er.exam_id = e.id WHERE er.id = ?',
+      [id]
+    );
     await db.run('DELETE FROM exam_records WHERE id = ?', [id]);
+    if (record && record.exam_title) {
+      await db.run('DELETE FROM scores WHERE exam_name = ? AND student_id = ?', [record.exam_title, record.student_id]);
+    }
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);

@@ -36,6 +36,12 @@
             <el-tag :type="getTypeTag(scope.row.type)">{{ scope.row.type }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="subject" label="科目" width="110">
+          <template #default="scope">
+            <el-tag v-if="scope.row.subject" type="warning" size="small">{{ scope.row.subject }}</el-tag>
+            <span v-else class="text-muted">未设置</span>
+          </template>
+        </el-table-column>
         <el-table-column label="关联资源" width="150">
           <template #default="scope">
             <el-tag v-if="scope.row.resource_title" type="info" size="small">
@@ -96,6 +102,19 @@
             <el-option label="期末考试" value="期末考试" />
           </el-select>
         </el-form-item>
+        <el-form-item label="科目">
+          <el-select
+            v-model="form.subject"
+            placeholder="选择或输入科目"
+            allow-create
+            filterable
+            default-first-option
+            style="width: 100%"
+          >
+            <el-option v-for="s in subjectOptions" :key="s" :label="s" :value="s" />
+          </el-select>
+          <div class="form-tip">科目将同步到成绩分析，如：语文、数学、英语</div>
+        </el-form-item>
         <el-form-item label="资源类别">
           <el-select v-model="form.resource_category" placeholder="全部类别" clearable style="width: 100%" @change="onCategoryChange">
             <el-option v-for="cat in categories" :key="cat.id" :label="cat.name" :value="cat.id" />
@@ -155,6 +174,10 @@
       <el-descriptions :column="1" border>
         <el-descriptions-item label="标题">{{ previewData.title }}</el-descriptions-item>
         <el-descriptions-item label="类型">{{ previewData.type }}</el-descriptions-item>
+        <el-descriptions-item label="科目">
+          <span v-if="previewData.subject">{{ previewData.subject }}</span>
+          <span v-else class="text-muted">未设置</span>
+        </el-descriptions-item>
         <el-descriptions-item label="关联资源">
           <span v-if="previewData.resource_title">{{ previewData.resource_title }}</span>
           <span v-else class="text-muted">未关联</span>
@@ -386,7 +409,10 @@ const importUploadRef = ref()
 const importFile = ref(null)
 const importExamId = ref(null)
 
-const form = ref({ id: null, title: '', type: '', content: '', resource_id: null, remark: '', resource_category: null, analyze: 0 })
+const form = ref({ id: null, title: '', type: '', subject: '', content: '', resource_id: null, remark: '', resource_category: null, analyze: 0 })
+
+// 常用科目选项（支持自由输入）
+const subjectOptions = ['语文', '数学', '英语', '科学', '道德与法治', '体育', '音乐', '美术']
 
 const getTypeTag = (type) => {
   const map = { 单元检测: 'primary', 专项练习: 'success', 期中考试: 'warning', 期末考试: 'danger' }
@@ -427,7 +453,7 @@ const preview = (row) => {
 }
 
 const openCreate = () => {
-  form.value = { id: null, title: '', type: '', content: '', resource_id: null, remark: '', resource_category: null, analyze: 0 }
+  form.value = { id: null, title: '', type: '', subject: '', content: '', resource_id: null, remark: '', resource_category: null, analyze: 0 }
   resourceOptions.value = []
   // 打开对话框时加载部分资源供选择
   searchResources('')
@@ -513,6 +539,7 @@ const handleSave = async () => {
     const payload = { 
       title: form.value.title, 
       type: form.value.type || '单元检测', 
+      subject: form.value.subject || null,
       content: form.value.content,
       resource_id: form.value.resource_id,
       remark: form.value.remark,
@@ -541,6 +568,7 @@ const toggleAnalyze = async (row) => {
     await updateExam(row.id, {
       title: row.title,
       type: row.type,
+      subject: row.subject || null,
       content: row.content,
       resource_id: row.resource_id,
       remark: row.remark,
