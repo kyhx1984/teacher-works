@@ -9,7 +9,9 @@ const teacherRoutes = require('./routes/teacher');
 const advisorRoutes = require('./routes/advisor');
 const statsRoutes = require('./routes/stats');
 const authRoutes = require('./routes/auth');
+const classRoutes = require('./routes/classes');
 const { authMiddleware } = require('./middleware/auth');
+const { getMainDb, runWithClass } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -33,10 +35,37 @@ app.get(API_PREFIX + '/health', (req, res) => {
   res.json({ code: 200, message: 'Server is running normally' });
 });
 
-// 需要认证的路由
-app.use(API_PREFIX, authMiddleware, teacherRoutes);
-app.use(API_PREFIX, authMiddleware, advisorRoutes);
-app.use(API_PREFIX, authMiddleware, statsRoutes);
+// 需要认证的路由（authMiddleware 认证 + classContextMiddleware 绑定班级上下文）
+// ============================================================
+// 多班级支持：班级上下文中间件 + 班级管理路由
+// 中间件必须在 auth 路由之后、业务路由之前生效：
+//   - auth 路由（登录/改密）读写主库，不绑定班级
+//   - 业务路由通过 getDb() 自动拿到当前班级库
+// 无 X-Class-Id 或 id 无效时回退默认班级，保证兼容不崩溃
+// ============================================================
+const classContextMiddleware = async (req, res, next) => {
+  try {
+    const db = await getMainDb();
+    const classId = parseInt(req.headers['x-class-id'], 10);
+    let row = null;
+    if (classId && !Number.isNaN(classId)) {
+      row = await db.get('SELECT id, db_file FROM classes WHERE id = ?', [classId]);
+    }
+    if (!row) {
+      // 无请求头或 id 无效：回退默认班级
+      row = await db.get("SELECT id, db_file FROM classes WHERE is_default = 1");
+    }
+    runWithClass(row ? { classId: row.id, dbFile: row.db_file } : null, next);
+  } catch (err) {
+    // 主库异常时仍放行请求（getDb 会回退主库），错误由业务路由抛出
+    next();
+  }
+};
+
+app.use(API_PREFIX + '/classes', authMiddleware, classRoutes);
+app.use(API_PREFIX, authMiddleware, classContextMiddleware, teacherRoutes);
+app.use(API_PREFIX, authMiddleware, classContextMiddleware, advisorRoutes);
+app.use(API_PREFIX, authMiddleware, classContextMiddleware, statsRoutes);
 
 // 若前端已构建(dist 存在), 由后端直接托管前端页面,
 // 无需 Nginx 也可通过 http://localhost:3000 直接访问整个系统。

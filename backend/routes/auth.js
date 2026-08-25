@@ -1,14 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const { getDb } = require('../db');
+// 登录认证属教师身份信息，固定读写主库（不随班级切换）
+const { getMainDb } = require('../db');
 const { SECRET_KEY, authMiddleware } = require('../middleware/auth');
 
 // POST /auth/login - 登录
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const db = await getDb();
+    const db = await getMainDb();
     const settings = {};
     const rows = await db.all('SELECT key, value FROM settings WHERE key IN (?, ?)', ['auth_username', 'auth_password']);
     rows.forEach(r => settings[r.key] = r.value);
@@ -40,7 +41,7 @@ router.get('/check', async (req, res) => {
 router.put('/password', authMiddleware, async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
-    const db = await getDb();
+    const db = await getMainDb();
     const row = await db.get('SELECT value FROM settings WHERE key = ?', ['auth_password']);
     if (oldPassword !== (row?.value || 'admin123')) {
       return res.status(400).json({ code: 400, message: '原密码错误', data: null });

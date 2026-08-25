@@ -1,13 +1,30 @@
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 const path = require('path');
+const fs = require('fs');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 // 支持通过环境变量配置数据库路径，Docker 部署时指向持久化数据目录
 const dbPath = process.env.DB_PATH || path.resolve(__dirname, 'database.sqlite');
 
+// ============================================================
+// 多班级支持：主库存身份（登录/教师信息/班级注册表），
+// 每班一个数据库文件存业务数据（学生/成绩/请假等），物理隔离。
+// ============================================================
+
+// 班级库文件统一存放目录（与主库同目录，Docker 下随 DB_PATH 归位）
+const classDbDir = path.dirname(dbPath);
+
+// 请求级班级上下文：中间件调用 runWithClass 注入，异步链路自动透传
+const classContext = new AsyncLocalStorage();
+
+// 班级连接缓存：dbFile -> 连接（'default' 直接复用主库连接）
+const classDbCache = new Map();
+
 let dbInstance = null;
 
-async function getDb() {
+// 主库连接（显式获取，供班级注册表等身份类查询使用）
+async function getMainDb() {
   if (dbInstance) {
     return dbInstance;
   }
@@ -18,9 +35,71 @@ async function getDb() {
   return dbInstance;
 }
 
+// 获取当前请求上下文的班级库连接：
+// 1. 无班级上下文（启动阶段/健康检查等）或默认班级 -> 主库
+// 2. 有上下文 -> 对应班级库文件（按文件路径缓存连接）
+async function getDb() {
+  const ctx = classContext.getStore();
+  if (!ctx || !ctx.dbFile || ctx.dbFile === 'default') {
+    return getMainDb();
+  }
+  if (classDbCache.has(ctx.dbFile)) {
+    return classDbCache.get(ctx.dbFile);
+  }
+  const conn = await open({
+    filename: path.join(classDbDir, ctx.dbFile),
+    driver: sqlite3.Database
+  });
+  classDbCache.set(ctx.dbFile, conn);
+  return conn;
+}
+
+// 班级中间件调用：把当前请求绑定到指定班级库
+function runWithClass(ctx, next) {
+  classContext.run(ctx, next);
+}
+
+// 从连接缓存移除并关闭班级连接（删除班级时使用）
+async function closeClassDb(dbFile) {
+  const conn = classDbCache.get(dbFile);
+  if (conn) {
+    classDbCache.delete(dbFile);
+    try { await conn.close(); } catch (e) { /* 连接已关闭，忽略 */ }
+  }
+}
+
+// 班级库文件绝对路径（供创建/删除班级使用）
+function classDbPath(dbFile) {
+  return path.join(classDbDir, dbFile);
+}
+
 async function initDb() {
-  const db = await getDb();
-  
+  const db = await getMainDb();
+
+  // 班级注册表（主库持有）
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS classes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      db_file TEXT NOT NULL UNIQUE,
+      is_default INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // 老用户一次性迁移：classes 表为空时，把现有主库注册为「默认班级」。
+  // 复用主库文件本身（db_file='default'），不搬任何数据，零风险。
+  const classCount = await db.get('SELECT COUNT(*) as c FROM classes');
+  if (!classCount || classCount.c === 0) {
+    await db.run("INSERT INTO classes (name, db_file, is_default) VALUES ('默认班级', 'default', 1)");
+  }
+
+  // 主库同时作为「默认班级」的业务库，初始化全部业务表
+  await initClassDb(db);
+}
+
+// 初始化一个班级库的全部业务表与默认数据（主库与新建班级库共用此逻辑）
+async function initClassDb(db) {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS resources (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -372,5 +451,10 @@ async function initDb() {
 
 module.exports = {
   getDb,
-  initDb
+  getMainDb,
+  initDb,
+  initClassDb,
+  runWithClass,
+  closeClassDb,
+  classDbPath
 };

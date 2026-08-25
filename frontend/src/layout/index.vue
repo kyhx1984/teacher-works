@@ -89,6 +89,27 @@
       <el-header class="header">
         <div class="header-left">
           <span class="page-title">{{ pageTitle }}</span>
+          <!-- 班级切换器：单班级时为只读标签，多班级时为下拉切换 -->
+          <el-select
+            v-if="classList.length > 1"
+            v-model="currentClassId"
+            size="small"
+            class="class-switcher"
+            @change="switchClass"
+          >
+            <el-option
+              v-for="c in classList"
+              :key="c.id"
+              :value="c.id"
+              :label="`${c.name}（${c.student_count}人）`"
+            />
+          </el-select>
+          <el-tag v-else-if="currentClassName" type="success" size="small" class="grade-tag">
+            {{ currentClassName }}
+          </el-tag>
+          <el-button size="small" plain class="grade-tag" @click="openClassDialog">
+            <el-icon><Setting /></el-icon>班级
+          </el-button>
           <el-tag v-if="gradeInfo.level" type="warning" size="small" class="grade-tag">
             {{ gradeInfo.level }}（{{ gradeInfo.year }}级）
           </el-tag>
@@ -218,20 +239,204 @@
         <el-button type="primary" :loading="gradeSaving" @click="saveGradeYear">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 班级管理对话框（新建 / 重命名 / 删除） -->
+    <el-dialog v-model="showClassDialog" title="班级管理" width="560px">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+        title="每个班级拥有独立的学生、成绩、考勤等全部数据，互不影响"
+      />
+      <el-table :data="classList" size="small" border>
+        <el-table-column label="班级名称" min-width="140">
+          <template #default="{ row }">
+            <el-tag v-if="row.is_default" type="info" size="small" style="margin-right: 6px">默认</el-tag>
+            <span v-if="renamingId !== row.id">{{ row.name }}</span>
+            <el-input
+              v-else
+              v-model="renamingName"
+              size="small"
+              style="width: 120px"
+              @keyup.enter="saveRename(row)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column prop="student_count" label="学生数" width="80" align="center" />
+        <el-table-column label="操作" width="170" align="center">
+          <template #default="{ row }">
+            <el-button
+              v-if="renamingId !== row.id"
+              size="small"
+              text
+              type="primary"
+              @click="startRename(row)"
+            >重命名</el-button>
+            <el-button
+              v-else
+              size="small"
+              text
+              type="success"
+              @click="saveRename(row)"
+            >保存</el-button>
+            <el-button
+              v-if="!row.is_default"
+              size="small"
+              text
+              type="danger"
+              @click="removeClass(row)"
+            >删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <!-- 新建班级 -->
+      <div style="display: flex; gap: 8px; margin-top: 16px">
+        <el-input
+          v-model="newClassName"
+          placeholder="输入新班级名称，如：一(2)班"
+          size="small"
+          @keyup.enter="addClass"
+        />
+        <el-button type="primary" size="small" :loading="classCreating" @click="addClass">新建班级</el-button>
+      </div>
+    </el-dialog>
   </el-container>
 </template>
 
 <script setup>
 import { ref, computed, reactive, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Key, SwitchButton, Upload } from '@element-plus/icons-vue'
-import { getSettings, updateSetting, getGradeInfo, updateGradeYear, changePassword, uploadTeacherAvatar } from '../api'
+import { Key, SwitchButton, Upload, Setting } from '@element-plus/icons-vue'
+import { getSettings, updateSetting, getGradeInfo, updateGradeYear, changePassword, uploadTeacherAvatar, getClasses, createClass, renameClass, deleteClass } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta.title || '工作台')
+
+// ================= 班级管理（多班级支持） =================
+const classList = ref([])
+const currentClassId = ref(null)
+const currentClassName = computed(() => {
+  const c = classList.value.find((c) => c.id === currentClassId.value)
+  return c ? c.name : ''
+})
+const showClassDialog = ref(false)
+const newClassName = ref('')
+const classCreating = ref(false)
+const renamingId = ref(null)
+const renamingName = ref('')
+
+// 加载班级列表并恢复当前班级（localStorage 记忆 + 后端校验回退）
+const loadClasses = async () => {
+  try {
+    const res = await getClasses()
+    classList.value = res || []
+    const saved = parseInt(localStorage.getItem('currentClassId'), 10)
+    const exists = classList.value.some((c) => c.id === saved)
+    const target = exists
+      ? saved
+      : (classList.value.find((c) => c.is_default) || classList.value[0] || {}).id
+    currentClassId.value = target ?? null
+    localStorage.setItem('currentClassId', String(target ?? ''))
+  } catch (err) {
+    console.error('加载班级列表失败:', err)
+  }
+}
+
+// 切换班级：更新记忆后整页刷新，保证所有页面数据随班级切换
+const switchClass = (id) => {
+  localStorage.setItem('currentClassId', String(id))
+  window.location.reload()
+}
+
+// 打开班级管理对话框
+const openClassDialog = () => {
+  newClassName.value = ''
+  renamingId.value = null
+  showClassDialog.value = true
+  loadClasses()
+}
+
+// 新建班级
+const addClass = async () => {
+  const name = newClassName.value.trim()
+  if (!name) {
+    ElMessage.warning('请输入班级名称')
+    return
+  }
+  classCreating.value = true
+  try {
+    await createClass({ name })
+    ElMessage.success('班级创建成功')
+    newClassName.value = ''
+    await loadClasses()
+  } catch (err) {
+    // 错误信息已由 request 拦截器提示
+  } finally {
+    classCreating.value = false
+  }
+}
+
+// 开始重命名
+const startRename = (row) => {
+  renamingId.value = row.id
+  renamingName.value = row.name
+}
+
+// 保存重命名
+const saveRename = async (row) => {
+  const name = renamingName.value.trim()
+  if (!name) {
+    ElMessage.warning('班级名称不能为空')
+    return
+  }
+  try {
+    await renameClass(row.id, { name })
+    ElMessage.success('重命名成功')
+    renamingId.value = null
+    await loadClasses()
+  } catch (err) {
+    // 错误信息已由 request 拦截器提示
+  }
+}
+
+// 删除班级：输入班级名二次确认（防误删一学期数据）
+const removeClass = (row) => {
+  ElMessageBox.prompt(
+    `删除后「${row.name}」的全部学生、成绩等数据将无法恢复！请输入班级名称「${row.name}」确认删除：`,
+    '危险操作',
+    {
+      type: 'warning',
+      confirmButtonText: '确认删除',
+      confirmButtonClass: 'el-button--danger',
+      cancelButtonText: '取消',
+      inputPattern: new RegExp(`^${row.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
+      inputErrorMessage: '输入的名称与班级名称不一致'
+    }
+  )
+    .then(async ({ value }) => {
+      try {
+        await deleteClass(row.id, { confirm_name: value })
+        ElMessage.success('班级已删除')
+        // 删除的是当前班级时，切回默认班级
+        if (currentClassId.value === row.id) {
+          localStorage.removeItem('currentClassId')
+          window.location.reload()
+          return
+        }
+        await loadClasses()
+      } catch (err) {
+        // 错误信息已由 request 拦截器提示
+      }
+    })
+    .catch(() => {
+      // 用户取消
+    })
+}
 
 // 教师信息
 const teacherName = ref('陈老师')
@@ -474,6 +679,7 @@ const handleLogout = () => {
 }
 
 onMounted(() => {
+  loadClasses()
   loadTeacherInfo()
   updateCurrentDate()
   setInterval(updateCurrentDate, 60000)
@@ -532,6 +738,11 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* 班级切换器：与年级标签同一视觉层级 */
+.class-switcher {
+  width: 160px;
 }
 
 .header-right {

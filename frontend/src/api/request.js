@@ -6,12 +6,16 @@ const service = axios.create({
   timeout: 30000
 })
 
-// 请求拦截器：自动在 header 中带上 token
+// 请求拦截器：自动在 header 中带上 token 与当前班级 ID（多班级支持）
 service.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
+    }
+    const currentClassId = localStorage.getItem('currentClassId')
+    if (currentClassId) {
+      config.headers['X-Class-Id'] = currentClassId
     }
     return config
   },

@@ -5,6 +5,13 @@ export const login = (data) => request.post('/auth/login', data)
 export const checkAuth = () => request.get('/auth/check')
 export const changePassword = (data) => request.put('/auth/password', data)
 
+// ================= 班级管理（多班级支持） =================
+export const getClasses = () => request.get('/classes')
+export const createClass = (data) => request.post('/classes', data)
+export const renameClass = (id, data) => request.put(`/classes/${id}`, data)
+export const deleteClass = (id, data) => request.delete(`/classes/${id}`, data)
+export const getCurrentClass = () => request.get('/classes/current')
+
 // ================= 统计数据 =================
 export const getStats = () => request.get('/stats')
 
