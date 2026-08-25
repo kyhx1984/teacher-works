@@ -38,7 +38,7 @@
             <el-button link type="primary" size="small" @click="viewTaskDetail(scope.row)">
               查看详情
             </el-button>
-            <el-button link type="success" size="small" @click="exportTask(scope.row.id)">
+            <el-button link type="success" size="small" @click="exportTask(scope.row)">
               导出Excel
             </el-button>
             <el-button link type="warning" size="small" @click="openEditTask(scope.row)">
@@ -73,7 +73,7 @@
             <el-button type="primary" @click="openAddStudents">
               <el-icon><Plus /></el-icon>添加学生
             </el-button>
-            <el-button type="success" @click="exportTask(selectedTask.id)">
+            <el-button type="success" @click="exportTask(selectedTask)">
               <el-icon><Download /></el-icon>导出Excel
             </el-button>
           </div>
@@ -702,14 +702,14 @@ const handleDeleteRecord = async (id) => {
   }
 }
 
-// 导出任务
-const exportTask = async (taskId) => {
+// 导出任务（文件名使用任务标题）
+const exportTask = async (task) => {
   try {
-    const blob = await exportHomeworkTask(taskId)
+    const blob = await exportHomeworkTask(task.id)
     const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `作业任务_${taskId}.xlsx`
+    link.download = `${task.title}_作业完成情况.xlsx`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)

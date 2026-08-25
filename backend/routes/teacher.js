@@ -9,6 +9,13 @@ const { getDb, getMainDb } = require('../db');
 // 教师身份类设置（姓名/头像）全局共享，固定存主库，不随班级切换
 const TEACHER_IDENTITY_KEYS = ['teacher_name', 'teacher_avatar'];
 
+// 构建文件下载响应头：中文文件名需整体编码，否则 Node 会抛
+// "Invalid character in header content"（导致导出接口 500）
+function contentDisposition(filename) {
+  const encoded = encodeURIComponent(filename);
+  return `attachment; filename="${encoded}"; filename*=UTF-8''${encoded}`;
+}
+
 // Setup multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -391,13 +398,11 @@ router.get('/exam-records/template', async (req, res) => {
     ];
     
     xlsx.utils.book_append_sheet(wb, ws, '成绩模板');
-    
-    // 设置响应头
+
+    // 设置响应头并写入响应（buffer 方式，writeFile 不支持响应流）
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(exam.title)}_成绩模板.xlsx"`);
-    
-    // 写入响应
-    xlsx.writeFile(wb, res);
+    res.setHeader('Content-Disposition', contentDisposition(`${exam.title}_成绩模板.xlsx`));
+    res.send(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -445,13 +450,11 @@ router.get('/exam-records/export', async (req, res) => {
     ];
     
     xlsx.utils.book_append_sheet(wb, ws, '成绩数据');
-    
-    // 设置响应头
+
+    // 设置响应头并写入响应（buffer 方式，writeFile 不支持响应流）
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(exam.title)}_成绩数据.xlsx"`);
-    
-    // 写入响应
-    xlsx.writeFile(wb, res);
+    res.setHeader('Content-Disposition', contentDisposition(`${exam.title}_成绩数据.xlsx`));
+    res.send(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
@@ -787,14 +790,14 @@ router.get('/recitation-tasks/:id/export', async (req, res) => {
     const task = await db.get('SELECT * FROM recitation_tasks WHERE id = ?', [id]);
     if (!task) return sendResponse(res, null, '任务不存在', 404);
     
+    // 以学生表为主 LEFT JOIN 记录表：导出全班名单，无记录的学生显示"未完成"
     const records = await db.all(`
-      SELECT r.*, s.name as student_name, s.grade, s.class
-      FROM recitation_records r
-      LEFT JOIN students s ON r.student_id = s.id
-      WHERE r.task_id = ?
+      SELECT s.name as student_name, s.grade, s.class, r.status, r.completed_at, r.remark
+      FROM students s
+      LEFT JOIN recitation_records r ON r.student_id = s.id AND r.task_id = ?
       ORDER BY s.class, s.name
     `, [id]);
-    
+
     const data = records.map(r => ({
       '班级': r.class || '',
       '姓名': r.student_name || '',
@@ -819,7 +822,7 @@ router.get('/recitation-tasks/:id/export', async (req, res) => {
     
     const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(task.title)}_背书完成情况.xlsx"`);
+    res.setHeader('Content-Disposition', contentDisposition(`${task.title}_背书完成情况.xlsx`));
     res.send(buffer);
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -1032,19 +1035,19 @@ router.get('/homework-tasks/:id/export', async (req, res) => {
     const task = await db.get('SELECT * FROM homework_tasks WHERE id = ?', [id]);
     if (!task) return sendResponse(res, null, '任务不存在', 404);
     
+    // 以学生表为主 LEFT JOIN 记录表：导出全班名单，无记录的学生显示"未完成"
     const records = await db.all(`
-      SELECT r.*, s.name as student_name, s.grade, s.class
-      FROM homework_records r
-      LEFT JOIN students s ON r.student_id = s.id
-      WHERE r.task_id = ?
+      SELECT s.name as student_name, s.grade, s.class, r.status, r.score, r.completed_at, r.remark
+      FROM students s
+      LEFT JOIN homework_records r ON r.student_id = s.id AND r.task_id = ?
       ORDER BY s.class, s.name
     `, [id]);
-    
+
     const data = records.map(r => ({
       '班级': r.class || '',
       '姓名': r.student_name || '',
       '状态': r.status === 1 ? '已完成' : '未完成',
-      '成绩': r.score || '',
+      '成绩': r.score ?? '',
       '完成时间': r.completed_at ? new Date(r.completed_at).toLocaleString('zh-CN') : '',
       '备注': r.remark || ''
     }));
@@ -1066,7 +1069,7 @@ router.get('/homework-tasks/:id/export', async (req, res) => {
     
     const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(task.title)}_作业完成情况.xlsx"`);
+    res.setHeader('Content-Disposition', contentDisposition(`${task.title}_作业完成情况.xlsx`));
     res.send(buffer);
   } catch (err) {
     sendResponse(res, null, err.message, 500);

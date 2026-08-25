@@ -69,7 +69,7 @@
             <el-button link type="primary" size="small" @click="preview(scope.row)">预览</el-button>
             <el-button link type="primary" size="small" @click="viewRecords(scope.row)">记录</el-button>
             <el-button link type="primary" size="small" @click="generateRecords(scope.row)">生成</el-button>
-            <el-button link type="success" size="small" @click="exportTemplate(scope.row.id)">模板</el-button>
+            <el-button link type="success" size="small" @click="exportTemplate(scope.row)">模板</el-button>
             <el-button link type="warning" size="small" @click="openImport(scope.row)">导入</el-button>
             <el-button 
               v-if="scope.row.resource_path" 
@@ -200,7 +200,7 @@
           <el-button type="primary" size="small" @click="openAddStudent">
             <el-icon><Plus /></el-icon>添加学生
           </el-button>
-          <el-button type="success" size="small" @click="exportTemplate(currentExam.id)">
+          <el-button type="success" size="small" @click="exportTemplate(currentExam)">
             <el-icon><Download /></el-icon>导出模板
           </el-button>
           <el-button type="warning" size="small" @click="openImport(currentExam)">
@@ -754,14 +754,14 @@ const handleSaveRecord = async () => {
   }
 }
 
-// 导出模板
-const exportTemplate = async (examId) => {
+// 导出模板（文件名使用试卷标题）
+const exportTemplate = async (exam) => {
   try {
-    const blob = await exportExamTemplate(examId)
+    const blob = await exportExamTemplate(exam.id)
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `考试模板_${examId}.xlsx`
+    a.download = `${exam.title}_成绩模板.xlsx`
     a.click()
     URL.revokeObjectURL(url)
     ElMessage.success('模板已导出')
