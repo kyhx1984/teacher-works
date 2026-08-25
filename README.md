@@ -152,6 +152,31 @@ cd ..
 # 默认账号: admin / admin123
 ```
 
+### 方式三：Windows 部署（Win10 1803+ / Win11）
+
+```bat
+:: 1. 解压或克隆源码后，进入项目目录，双击运行（或在资源管理器中双击）：
+install.bat    :: 全自动安装：检测/自动安装 Node.js -> 安装后端依赖 -> 构建前端
+
+:: 2. 一键启动（首次运行会自动检测并安装环境）
+start.bat      :: 启动后自动打开浏览器，服务在后台运行
+
+:: 3. 访问系统
+:: 浏览器打开: http://localhost:3000
+:: 默认账号: admin / admin123
+
+:: 其他命令
+start.bat status    :: 查看运行状态
+start.bat restart   :: 重启服务
+stop.bat            :: 一键停止服务
+```
+
+**说明：**
+- `install.bat` 的 Node.js 自动安装顺序：已安装检测 → winget 静默安装 → 下载 MSI 静默安装（自动弹 UAC 提权）；全部失败时给出手动安装指引
+- 脚本可重复执行（幂等），已安装的部分会自动跳过
+- 服务端口默认 3000，如需修改请编辑 `start.bat` 顶部的 `PORT` 变量
+- 日志位于 `logs\` 目录，进程 PID 记录在 `run\backend.pid`
+
 ### 开发模式
 
 ```bash
@@ -193,9 +218,12 @@ teacher-works/
 │   └── package.json          # 前端依赖
 ├── docs/                      # 文档
 ├── build.sh                   # 构建打包脚本
-├── start.sh                   # 启动脚本
-├── stop.sh                    # 停止脚本
+├── start.sh                   # 启动脚本（mac/Linux）
+├── stop.sh                    # 停止脚本（mac/Linux）
 ├── deploy.sh                  # Docker 部署脚本
+├── install.bat                # Windows 环境安装脚本
+├── start.bat                  # Windows 启动脚本
+├── stop.bat                   # Windows 停止脚本
 ├── Dockerfile                 # Docker 镜像配置
 ├── docker-compose.yml         # Docker Compose 配置
 └── entrypoint.sh              # 容器入口脚本

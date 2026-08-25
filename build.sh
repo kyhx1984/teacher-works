@@ -85,8 +85,9 @@ rm -f "$STAGE_DIR/teacher-ops/backend/.gitignore"
 # 前端构建产物
 cp -R "$FRONTEND_DIR/dist" "$STAGE_DIR/teacher-ops/frontend/dist"
 
-# 仅打包运行必需文件: 启停脚本 + Docker 部署文件 + Nginx 样例 + 使用说明
+# 仅打包运行必需文件: 启停脚本(mac/Linux + Windows) + Docker 部署文件 + Nginx 样例 + 使用说明
 cp -f "$ROOT_DIR/start.sh" "$ROOT_DIR/stop.sh" "$ROOT_DIR/deploy.sh" "$ROOT_DIR/entrypoint.sh" "$STAGE_DIR/teacher-ops/"
+cp -f "$ROOT_DIR/install.bat" "$ROOT_DIR/start.bat" "$ROOT_DIR/stop.bat" "$STAGE_DIR/teacher-ops/"
 cp -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR/.dockerignore" "$ROOT_DIR/docker-compose.yml" "$STAGE_DIR/teacher-ops/"
 cp -f "$ROOT_DIR/deploy/nginx.conf" "$STAGE_DIR/teacher-ops/deploy/"
 cp -f "$ROOT_DIR/README.md" "$STAGE_DIR/teacher-ops/" 2>/dev/null || true
@@ -121,6 +122,13 @@ Node版本: $(node -v 2>/dev/null || echo "未安装")
 2. 进入目录: cd teacher-ops
 3. 一键启动: ./start.sh (首次启动自动安装依赖)
 4. 访问: http://服务器IP:3000
+
+【Windows 部署】(Win10 1803+ / Win11)
+1. 解压: tar -xzf $ARCHIVE.tar.gz
+2. 进入目录: cd teacher-ops
+3. 双击 install.bat (自动安装 Node.js 环境与依赖)
+4. 双击 start.bat 启动, 访问: http://localhost:3000
+5. 停止服务: 双击 stop.bat
 EOF
 chmod 644 "$STAGE_DIR/teacher-ops/VERSION.txt"
 
