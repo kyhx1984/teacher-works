@@ -4,7 +4,10 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const xlsx = require('xlsx');
-const { getDb } = require('../db');
+const { getDb, getMainDb } = require('../db');
+
+// 教师身份类设置（姓名/头像）全局共享，固定存主库，不随班级切换
+const TEACHER_IDENTITY_KEYS = ['teacher_name', 'teacher_avatar'];
 
 // Setup multer for file uploads
 const storage = multer.diskStorage({
@@ -1273,6 +1276,12 @@ router.get('/settings', async (req, res) => {
     const rows = await db.all('SELECT key, value FROM settings');
     const settings = {};
     rows.forEach(row => { settings[row.key] = row.value; });
+    // 教师身份类设置从主库读取（全局共享）
+    const mainDb = await getMainDb();
+    const identityRows = await mainDb.all(
+      `SELECT key, value FROM settings WHERE key IN ('teacher_name', 'teacher_avatar')`
+    );
+    identityRows.forEach(row => { settings[row.key] = row.value; });
     sendResponse(res, settings);
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -1378,7 +1387,8 @@ router.put('/settings/:key', async (req, res) => {
   try {
     const { key } = req.params;
     const { value } = req.body;
-    const db = await getDb();
+    // 教师身份类设置写主库（全局共享），其余随班级库
+    const db = TEACHER_IDENTITY_KEYS.includes(key) ? await getMainDb() : await getDb();
     const existing = await db.get('SELECT key FROM settings WHERE key = ?', [key]);
     if (existing) {
       await db.run('UPDATE settings SET value = ? WHERE key = ?', [value, key]);

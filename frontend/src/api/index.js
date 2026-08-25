@@ -9,7 +9,7 @@ export const changePassword = (data) => request.put('/auth/password', data)
 export const getClasses = () => request.get('/classes')
 export const createClass = (data) => request.post('/classes', data)
 export const renameClass = (id, data) => request.put(`/classes/${id}`, data)
-export const deleteClass = (id, data) => request.delete(`/classes/${id}`, data)
+export const deleteClass = (id, data) => request.delete(`/classes/${id}`, { data })
 export const getCurrentClass = () => request.get('/classes/current')
 
 // ================= 统计数据 =================

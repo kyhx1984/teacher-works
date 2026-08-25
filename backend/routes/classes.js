@@ -76,17 +76,26 @@ router.post('/', async (req, res) => {
     const result = await db.run('INSERT INTO classes (name, db_file) VALUES (?, ?)', [trimmed, 'pending']);
     const classId = result.lastID;
     const dbFile = `class-${classId}.sqlite`;
-    await db.run('UPDATE classes SET db_file = ? WHERE id = ?', [dbFile, classId]);
 
-    // 创建班级库文件并初始化全部业务表
-    const conn = await open({
-      filename: classDbPath(dbFile),
-      driver: sqlite3.Database
-    });
+    // 创建班级库文件并初始化全部业务表；失败时回滚注册记录，避免残留脏数据
     try {
-      await initClassDb(conn);
-    } finally {
-      await conn.close();
+      const conn = await open({
+        filename: classDbPath(dbFile),
+        driver: sqlite3.Database
+      });
+      try {
+        await initClassDb(conn);
+      } finally {
+        await conn.close();
+      }
+      await db.run('UPDATE classes SET db_file = ? WHERE id = ?', [dbFile, classId]);
+    } catch (e) {
+      // 回滚：删除注册记录与可能残留的半成品库文件
+      await db.run('DELETE FROM classes WHERE id = ?', [classId]);
+      try {
+        if (fs.existsSync(classDbPath(dbFile))) fs.unlinkSync(classDbPath(dbFile));
+      } catch (cleanupErr) { /* 清理失败不影响回滚结果 */ }
+      return sendResponse(res, null, `班级创建失败: ${e.message}`, 500);
     }
 
     sendResponse(res, { id: classId, name: trimmed, db_file: dbFile }, '班级创建成功');

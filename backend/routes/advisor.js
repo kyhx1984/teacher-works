@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const xlsx = require('xlsx');
-const { getDb } = require('../db');
+const { getDb, getMainDb } = require('../db');
 
 // 用于 Excel 导入的内存存储上传
 const upload = multer({ storage: multer.memoryStorage() });
@@ -157,10 +157,11 @@ router.post('/students/:id/avatar', leaveImageUpload.single('avatar'), async (re
 });
 
 // POST /teacher/avatar - 上传教师头像（保存到 uploads/ 目录，更新 settings.teacher_avatar）
+// 教师头像属教师身份，固定写主库（全局共享，不随班级切换）
 router.post('/teacher/avatar', leaveImageUpload.single('avatar'), async (req, res) => {
   try {
     if (!req.file) return sendResponse(res, null, '未上传头像文件', 400);
-    const db = await getDb();
+    const db = await getMainDb();
     // 删除旧头像文件（卡通头像为 emoji: 前缀，跳过）
     const old = await db.get("SELECT value FROM settings WHERE key = 'teacher_avatar'");
     if (old && old.value && !old.value.startsWith('emoji:')) {
