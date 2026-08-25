@@ -7,8 +7,9 @@
 #   ./build.sh            构建前端并打包便携部署包(推荐, 跨平台)
 #   ./build.sh --full     额外附带后端 node_modules(仅限与打包机同平台离线部署)
 #
-# 产物:
-#   release/teacher-ops-<版本>-<日期>.tar.gz
+#   产物:
+#   release/teacher-ops-<版本>-<日期>.tar.gz   (Linux/macOS/Docker 部署)
+#   release/teacher-ops-<版本>-<日期>.zip      (Windows 部署, 资源管理器可直接双击解压)
 #
 # 部署:
 #   1. 将 release/*.tar.gz 上传到云服务器
@@ -41,9 +42,12 @@ ARCHIVE="teacher-ops-${VERSION}-${TIMESTAMP}"
 INCLUDE_NODE_MODULES=0
 
 # 解决 macOS Apple Silicon 下 Rosetta 导致的架构不匹配问题
+# 注意: npm 的安装脚本子进程按 PATH 重新解析 node, 因此必须同时把 arm64 通用
+# node 所在目录提到 PATH 最前, 否则 arch -arm64 只作用于外层命令, 子进程仍会
+# 拿到 x86_64 node, 装出错误架构的原生模块(sqlite3/rollup)
 run_native() {
   if [ "$(uname -s)" = "Darwin" ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
-    arch -arm64 "$@"
+    arch -arm64 env PATH="/usr/local/bin:/opt/homebrew/bin:$PATH" "$@"
   else
     "$@"
   fi
@@ -92,6 +96,12 @@ cp -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR/.dockerignore" "$ROOT_DIR/docker-compose
 cp -f "$ROOT_DIR/deploy/nginx.conf" "$STAGE_DIR/teacher-ops/deploy/"
 cp -f "$ROOT_DIR/README.md" "$STAGE_DIR/teacher-ops/" 2>/dev/null || true
 
+# 确保 Windows 批处理脚本为 CRLF 换行(cmd.exe 要求, LF 会导致 goto 失效)
+# 并再次排除 macOS 的 ._ 隐藏文件
+for bat in "$STAGE_DIR/teacher-ops/"*.bat; do
+  perl -i -pe 's/\r?\n/\r\n/' "$bat"
+done
+
 # 确保脚本可执行
 chmod +x "$STAGE_DIR/teacher-ops/"*.sh
 
@@ -124,8 +134,8 @@ Node版本: $(node -v 2>/dev/null || echo "未安装")
 4. 访问: http://服务器IP:3000
 
 【Windows 部署】(Win10 1803+ / Win11)
-1. 解压: tar -xzf $ARCHIVE.tar.gz
-2. 进入目录: cd teacher-ops
+1. 解压: 双击 teacher-ops-*.zip 用资源管理器解压(或 tar -xzf *.tar.gz)
+2. 进入解压后的 teacher-ops 目录
 3. 双击 install.bat (自动安装 Node.js 环境与依赖)
 4. 双击 start.bat 启动, 访问: http://localhost:3000
 5. 停止服务: 双击 stop.bat
@@ -140,25 +150,39 @@ fi
 echo "[4/5] 打包压缩..."
 mkdir -p "$RELEASE_DIR"
 cd "$STAGE_DIR"
-# 排除 macOS 生成的 ._ 隐藏文件
+
+# Windows 用 zip 包(资源管理器可直接双击解压); ditto 不带 ._ 文件
+if command -v ditto &> /dev/null; then
+  ditto -c -k --sequesterRsrc --keepParent teacher-ops "$RELEASE_DIR/$ARCHIVE.zip"
+elif command -v zip &> /dev/null; then
+  zip -r -q -x '._*' "$RELEASE_DIR/$ARCHIVE.zip" teacher-ops
+else
+  echo "      [警告] 未找到 zip 工具, 跳过 Windows zip 包(可用: brew install zip)"
+fi
+
+# Linux/macOS/Docker 用 tar.gz 包, 排除 macOS 生成的 ._ 隐藏文件
 tar --exclude='._*' -czf "$RELEASE_DIR/$ARCHIVE.tar.gz" teacher-ops
 rm -rf "$STAGE_DIR"
 
-# 生成校验和文件
+# 生成校验和文件(tar.gz 与 zip 各一份)
 echo "[5/5] 生成校验和..."
 cd "$RELEASE_DIR"
-if command -v shasum &> /dev/null; then
-  shasum -a 256 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
-  echo "      SHA256: $(cat $ARCHIVE.tar.gz.sha256 | cut -d' ' -f1)"
-elif command -v md5 &> /dev/null; then
-  md5 "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.md5"
-  echo "      MD5: $(cat $ARCHIVE.tar.gz.md5 | cut -d' ' -f4)"
+for ARTIFACT in "$ARCHIVE.tar.gz" "$ARCHIVE.zip"; do
+  [ -f "$ARTIFACT" ] || continue
+  if command -v shasum &> /dev/null; then
+    shasum -a 256 "$ARTIFACT" > "$ARTIFACT.sha256"
+  elif command -v md5 &> /dev/null; then
+    md5 "$ARTIFACT" > "$ARTIFACT.md5"
+  fi
+done
+if [ -f "$ARCHIVE.tar.gz.sha256" ]; then
+  echo "      tar.gz SHA256: $(cut -d' ' -f1 $ARCHIVE.tar.gz.sha256)"
 fi
 
 echo ""
 echo "==================== 打包完成 ===================="
-SIZE="$(du -sh "$RELEASE_DIR/$ARCHIVE.tar.gz" | cut -f1)"
-echo "  文件: release/$ARCHIVE.tar.gz  ($SIZE)"
+echo "  文件: release/$ARCHIVE.tar.gz  ($(du -sh "$RELEASE_DIR/$ARCHIVE.tar.gz" | cut -f1))"
+[ -f "$RELEASE_DIR/$ARCHIVE.zip" ] && echo "  文件: release/$ARCHIVE.zip  ($(du -sh "$RELEASE_DIR/$ARCHIVE.zip" | cut -f1)) [Windows 用]"
 echo "  版本: $VERSION"
 echo "  构建时间: $(date '+%Y-%m-%d %H:%M:%S')"
 echo ""
@@ -170,6 +194,10 @@ echo ""
 echo "  直接部署:"
 echo "    1. 上传并解压到服务器"
 echo "    2. cd teacher-ops && ./start.sh"
+echo ""
+echo "  Windows 部署:"
+echo "    1. 下载 $ARCHIVE.zip, 解压后进入 teacher-ops 目录"
+echo "    2. 双击 install.bat 后, 双击 start.bat"
 echo ""
 if [ "$INCLUDE_NODE_MODULES" = "1" ]; then
   echo "  [注意] 包含 node_modules, 仅限同平台/同架构服务器"
