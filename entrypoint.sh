@@ -3,8 +3,8 @@ set -e
 
 echo "[entrypoint] 启动容器..."
 
-# 创建持久化目录
-mkdir -p /app/data/uploads
+# 创建持久化目录（注：上传文件由代码写入 /app/backend/uploads，
+# 经 bind mount 落在宿主机 backend/uploads/，无需在 data/ 下创建）
 
 # 迁移旧版数据库（从 backend/ 目录迁移到 data/ 目录）
 if [ -f "/app/backend/database.sqlite" ] && [ ! -L "/app/backend/database.sqlite" ]; then

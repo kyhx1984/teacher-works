@@ -381,20 +381,31 @@ const renderLeaveChart = (leaves) => {
   })
 }
 
-// 渲染学生成绩分布饼图
+// 渲染学生成绩分布饼图（按学生统计：每个学生取平均分，避免多科/多考次重复计数）
 const renderScoreChart = (scores) => {
   if (!scoreChartRef.value) return
   if (!scoreChartInstance) {
     scoreChartInstance = echarts.init(scoreChartRef.value)
   }
+  // 按学生分组求平均分（student_id 缺失时按姓名兜底，均无则按单条计）
+  const byStudent = new Map()
+  scores.forEach(s => {
+    const key = s.student_id ?? (s.student_name ? `n:${s.student_name}` : `r:${s.id}`)
+    const score = Number(s.score)
+    if (!Number.isFinite(score)) return
+    if (!byStudent.has(key)) byStudent.set(key, { sum: 0, n: 0 })
+    const item = byStudent.get(key)
+    item.sum += score
+    item.n++
+  })
   // 计算各分数段人数
   const ranges = { '优秀(90-100)': 0, '良好(80-89)': 0, '中等(70-79)': 0, '及格(60-69)': 0, '不及格(0-59)': 0 }
-  scores.forEach(s => {
-    const score = Number(s.score)
-    if (score >= 90) ranges['优秀(90-100)']++
-    else if (score >= 80) ranges['良好(80-89)']++
-    else if (score >= 70) ranges['中等(70-79)']++
-    else if (score >= 60) ranges['及格(60-69)']++
+  byStudent.forEach(({ sum, n }) => {
+    const avg = sum / n
+    if (avg >= 90) ranges['优秀(90-100)']++
+    else if (avg >= 80) ranges['良好(80-89)']++
+    else if (avg >= 70) ranges['中等(70-79)']++
+    else if (avg >= 60) ranges['及格(60-69)']++
     else ranges['不及格(0-59)']++
   })
   const colors = ['#67c23a', '#409eff', '#e6a23c', '#f56c6c', '#909399']

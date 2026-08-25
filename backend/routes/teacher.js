@@ -91,6 +91,8 @@ router.delete('/resources/:id', async (req, res) => {
       }
     }
     
+    // 解除试卷对该资源的引用，避免悬挂引用（导出/预览时 resource_title 变空）
+    await db.run('UPDATE exams SET resource_id = NULL WHERE resource_id = ?', [id]);
     await db.run('DELETE FROM resources WHERE id = ?', [id]);
     sendResponse(res, { id });
   } catch (err) {
@@ -130,7 +132,9 @@ router.delete('/resource-categories/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const db = await getDb();
-    await db.run('DELETE FROM resource_categories WHERE id = ?', [id]);
+    // 解除资源对该类别的引用，避免悬挂引用
+    await db.run('UPDATE resources SET category_id = NULL WHERE category_id = ?', [id]);
+    await db.run('DELETE FROM resource-categories WHERE id = ?', [id]);
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
@@ -171,7 +175,11 @@ router.get('/exams', async (req, res) => {
 router.post('/exams', async (req, res) => {
   try {
     const { title, type, subject, content, resource_id, remark, analyze } = req.body;
+    if (!title) return sendResponse(res, null, '试卷标题不能为空', 400);
     const db = await getDb();
+    // 同班库内禁止同名试卷：成绩分析按试卷标题关联，同名会导致成绩互相覆盖
+    const dup = await db.get('SELECT id FROM exams WHERE title = ?', [title]);
+    if (dup) return sendResponse(res, null, '已存在同名试卷，请更换标题', 400);
     const contentStr = typeof content === 'object' ? JSON.stringify(content) : content;
     const result = await db.run(
       'INSERT INTO exams (title, type, subject, content, resource_id, remark, analyze) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -191,7 +199,17 @@ router.put('/exams/:id', async (req, res) => {
     const db = await getDb();
     const existing = await db.get('SELECT id FROM exams WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '试卷不存在', 404);
+    // 同班库内禁止与其他试卷同名：成绩分析按试卷标题关联，同名会导致成绩互相覆盖
+    if (title) {
+      const dup = await db.get('SELECT id FROM exams WHERE title = ? AND id != ?', [title, id]);
+      if (dup) return sendResponse(res, null, '已存在同名试卷，请更换标题', 400);
+    }
     const contentStr = typeof content === 'object' ? JSON.stringify(content) : content;
+    // 改名时同步更新成绩分析中的试卷名关联，避免两处数据断裂
+    const before = await db.get('SELECT title FROM exams WHERE id = ?', [id]);
+    if (before && before.title && title && before.title !== title) {
+      await db.run('UPDATE scores SET exam_name = ? WHERE exam_name = ?', [title, before.title]);
+    }
     await db.run(
       'UPDATE exams SET title=?, type=?, subject=?, content=?, resource_id=?, remark=?, analyze=? WHERE id=?',
       [title, type, subject || null, contentStr, resource_id || null, remark || null, analyze ? 1 : 0, id]
@@ -260,6 +278,9 @@ router.post('/exam-records', async (req, res) => {
 
     // 添加单个学生的考试记录（已存在则跳过）
     if (student_id) {
+      // 校验学生存在，避免为已删除的学生创建孤儿记录
+      const student = await db.get('SELECT id FROM students WHERE id = ?', [student_id]);
+      if (!student) return sendResponse(res, null, '学生不存在', 404);
       await db.run(
         'INSERT INTO exam_records (exam_id, student_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM exam_records WHERE exam_id = ? AND student_id = ?)',
         [exam_id, student_id, exam_id, student_id]
@@ -464,37 +485,37 @@ router.get('/exam-records/export', async (req, res) => {
 router.post('/exam-records/import', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return sendResponse(res, null, '未上传文件', 400);
-    
+
     const { exam_id } = req.body;
     if (!exam_id) return sendResponse(res, null, 'exam_id 不能为空', 400);
-    
+
     const db = await getDb();
     const exam = await db.get('SELECT id FROM exams WHERE id = ?', [exam_id]);
     if (!exam) return sendResponse(res, null, '考试不存在', 404);
-    
+
     // 读取 Excel
     const workbook = xlsx.readFile(req.file.path);
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
     const data = xlsx.utils.sheet_to_json(worksheet);
-    
+
     let imported = 0;
     let updated = 0;
-    
+
     for (const row of data) {
       const studentId = row['学号'];
       const score = row['成绩'];
       const comment = row['评语'] || '';
       const remark = row['备注'] || '';
-      
+
       if (!studentId) continue;
-      
+
       // 检查是否已有记录
       const existing = await db.get(
         'SELECT id FROM exam_records WHERE exam_id = ? AND student_id = ?',
         [exam_id, studentId]
       );
-      
+
       if (existing) {
         // 更新
         await db.run(
@@ -511,13 +532,15 @@ router.post('/exam-records/import', upload.single('file'), async (req, res) => {
         imported++;
       }
     }
-    
-    // 删除临时文件
-    fs.unlinkSync(req.file.path);
-    
+
     sendResponse(res, { imported, updated });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
+  } finally {
+    // 无论成败都清理临时文件，避免失败时泄漏到 uploads/
+    if (req.file && req.file.path) {
+      try { fs.unlinkSync(req.file.path); } catch (e) { /* 忽略删除失败 */ }
+    }
   }
 });
 

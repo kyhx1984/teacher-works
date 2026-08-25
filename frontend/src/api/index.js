@@ -2,7 +2,6 @@ import request from './request'
 
 // ================= 认证 =================
 export const login = (data) => request.post('/auth/login', data)
-export const checkAuth = () => request.get('/auth/check')
 export const changePassword = (data) => request.put('/auth/password', data)
 
 // ================= 班级管理（多班级支持） =================
@@ -10,7 +9,6 @@ export const getClasses = () => request.get('/classes')
 export const createClass = (data) => request.post('/classes', data)
 export const renameClass = (id, data) => request.put(`/classes/${id}`, data)
 export const deleteClass = (id, data) => request.delete(`/classes/${id}`, { data })
-export const getCurrentClass = () => request.get('/classes/current')
 
 // ================= 统计数据 =================
 export const getStats = () => request.get('/stats')
@@ -121,7 +119,8 @@ export const batchDeletePoints = (ids) => request.delete('/points/batch', { data
 export const getLeaves = () => request.get('/leaves')
 export const createLeave = (data) => request.post('/leaves', data)
 export const updateLeave = (id, data) => request.put(`/leaves/${id}`, data)
-export const changeLeaveStatus = (id, status) => request.post('/leaves', { id, status })
+// 单条销假复用批量状态接口（原误发 POST /leaves 会新建空记录）
+export const changeLeaveStatus = (id, status) => request.put('/leaves/batch-status', { ids: [id], status })
 export const deleteLeave = (id) => request.delete(`/leaves/${id}`)
 export const batchUpdateLeaveStatus = (ids, status) => request.put('/leaves/batch-status', { ids, status })
 export const batchDeleteLeaves = (ids) => request.delete('/leaves/batch', { data: { ids } })

@@ -421,20 +421,26 @@ async function initClassDb(db) {
     }
   }
 
-  // 数据一致性修复：以「考试记录」为权威，同步成绩分析数据（仅当试卷已有考试记录时覆盖，
-  // 避免误删仅在成绩分析中录入且未生成考试记录的成绩）
-  for (const exam of examRows) {
-    const countRow = await db.get('SELECT COUNT(*) AS c FROM exam_records WHERE exam_id = ?', [exam.id]);
-    if (countRow.c > 0 && exam.title) {
-      await db.run('DELETE FROM scores WHERE exam_name = ?', [exam.title]);
-      const records = await db.all('SELECT student_id, score FROM exam_records WHERE exam_id = ? AND score IS NOT NULL', [exam.id]);
-      for (const r of records) {
-        await db.run(
-          'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
-          [r.student_id, exam.subject || '综合', r.score, exam.title]
-        );
+  // 数据一致性修复（一次性）：以「考试记录」为权威，同步成绩分析数据。
+  // 注意：此修复含 DELETE 操作，重复执行会静默覆盖两表不一致时的手工修改，
+  // 因此用 PRAGMA user_version 标记仅执行一次（每个数据库文件独立标记）
+  const pragmaRow = await db.get('PRAGMA user_version');
+  if (!pragmaRow || pragmaRow.user_version < 1) {
+    for (const exam of examRows) {
+      const countRow = await db.get('SELECT COUNT(*) AS c FROM exam_records WHERE exam_id = ?', [exam.id]);
+      if (countRow.c > 0 && exam.title) {
+        await db.run('DELETE FROM scores WHERE exam_name = ?', [exam.title]);
+        const records = await db.all('SELECT student_id, score FROM exam_records WHERE exam_id = ? AND score IS NOT NULL', [exam.id]);
+        for (const r of records) {
+          await db.run(
+            'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
+            [r.student_id, exam.subject || '综合', r.score, exam.title]
+          );
+        }
       }
     }
+    await db.run('PRAGMA user_version = 1');
+    console.log('Data repair (exam_records -> scores sync) completed once.');
   }
 
   // 插入默认资源功能类别（仅首次初始化时）

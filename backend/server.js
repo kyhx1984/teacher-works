@@ -58,6 +58,8 @@ const classContextMiddleware = async (req, res, next) => {
     runWithClass(row ? { classId: row.id, dbFile: row.db_file } : null, next);
   } catch (err) {
     // 主库异常时仍放行请求（getDb 会回退主库），错误由业务路由抛出
+    // 记录日志，避免静默降级到默认班级库而无任何痕迹
+    console.error('[class-context] 班级上下文解析失败，回退默认班级:', err.message);
     next();
   }
 };

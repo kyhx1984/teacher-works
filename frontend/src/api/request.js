@@ -37,6 +37,11 @@ service.interceptors.response.use(
   (error) => {
     // 401 未登录或登录过期：清除登录信息并跳转登录页
     if (error.response && error.response.status === 401) {
+      const msg401 =
+        (error.response.data && error.response.data.message) ||
+        '登录已过期，请重新登录'
+      // 登录页（登录失败）与普通页（token 过期）都给出提示，避免静默失败
+      ElMessage.error(msg401)
       localStorage.removeItem('token')
       localStorage.removeItem('username')
       // 避免在登录页重复跳转

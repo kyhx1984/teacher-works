@@ -66,7 +66,7 @@
 - 按状态、姓名、篇目筛选
 
 ### 座位表管理
-- 可配置列数（3-8 列）
+- 可配置列数（3-10 列）
 - 随机排座、按学号顺序排列
 - 点击两个座位即可交换
 - 座位布局持久化保存
@@ -153,6 +153,8 @@ cd ..
 # 浏览器打开: http://localhost:3000
 # 默认账号: admin / admin123
 ```
+
+**macOS（Apple Silicon）注意**：sqlite3 等原生模块与 Node 的 CPU 架构必须一致。若本机装有多个 Node（如通过 nvm 装过 x86_64 版本），`npm install` 和启动请使用同一架构的 node，否则会报 `incompatible architecture` 错误。遇到该错误时删除 `node_modules` 后用 `arch -arm64` 前缀重装即可。
 
 ### 方式三：Windows 部署（Win10 1803+ / Win11）
 
@@ -310,20 +312,46 @@ teacher-works/
 - `GET /api/v1/resources` - 获取资源列表
 - `POST /api/v1/resources` - 上传资源
 - `DELETE /api/v1/resources/:id` - 删除资源
+- `GET/POST/DELETE /api/v1/resource-categories` - 资源功能类别管理
 
 ### 试卷管理
 - `GET /api/v1/exams` - 获取试卷列表
-- `POST /api/v1/exams` - 新增试卷
+- `POST /api/v1/exams` - 新增试卷（同班内标题唯一）
+- `PUT /api/v1/exams/:id` - 更新试卷
 - `DELETE /api/v1/exams/:id` - 删除试卷
+
+### 考试记录
+- `GET /api/v1/exam-records` - 获取考试记录（支持 exam_id 筛选）
+- `POST /api/v1/exam-records` - 生成/补齐学生考试记录
+- `PUT/DELETE /api/v1/exam-records/:id` - 更新/删除单条记录
+- `POST /api/v1/exam-records/import` - Excel 导入成绩
+- `GET /api/v1/exam-records/template` - 导出成绩模板/成绩数据 Excel
+
+### 背书任务（两级结构）
+- `GET/POST/PUT/DELETE /api/v1/recitation-tasks` - 背书任务管理
+- `GET /api/v1/recitation-tasks/:id/export` - 导出全班完成情况 Excel
+
+### 作业任务（两级结构）
+- `GET/POST/PUT/DELETE /api/v1/homework-tasks` - 作业任务管理
+- `GET /api/v1/homework-tasks/:id/export` - 导出全班完成情况 Excel
+
+### 课程表
+- `GET /api/v1/schedule` - 获取课程表
+- `POST /api/v1/schedule` - 保存课程表项
+
+### 班级管理（多班级）
+- `GET/POST /api/v1/classes` - 班级列表/新建班级
+- `PUT /api/v1/classes/:id` - 重命名班级
+- `DELETE /api/v1/classes/:id` - 删除班级（需名称二次确认）
 
 更多接口细节请参考 `backend/routes/` 目录下的路由文件。
 
 ## 数据备份
 
 ### 数据库位置
-- **SQLite 数据库**: `backend/database.sqlite`
+- **SQLite 数据库**: `backend/database.sqlite`（多班级时：主库 + 每班一个 `class-N.sqlite`，均在 backend/ 目录）
 - **上传文件**: `backend/uploads/`
-- **Docker 持久化**: `data/` 目录（数据库 + 上传文件）
+- **Docker 持久化**: 数据库在 `data/` 目录；上传文件因代码挂载在 `./backend`，实际持久化于宿主机 `backend/uploads/`（备份时需一并包含）
 
 ### 备份方法
 ```bash
@@ -390,7 +418,7 @@ rm backend/database.sqlite
 - [ ] 消息通知功能
 - [ ] 移动端适配
 - [ ] 操作日志记录
-- [ ] 多班级管理
+- [x] 多班级管理（每班独立数据库物理隔离，顶栏一键切换）
 
 ## 贡献指南
 

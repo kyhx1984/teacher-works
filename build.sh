@@ -35,7 +35,9 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 BACKEND_DIR="$ROOT_DIR/backend"
 RELEASE_DIR="$ROOT_DIR/release"
 STAGE_DIR="$ROOT_DIR/.stage"
-VERSION="1.0.0"
+# 版本号单一来源：后端 package.json（避免与前端/脚本各自硬编码不一致）
+VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$BACKEND_DIR/package.json" | head -1)"
+[ -z "$VERSION" ] && VERSION="1.0.0"
 # 精确到秒的时间戳，避免同一天多次打包冲突
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 ARCHIVE="teacher-ops-${VERSION}-${TIMESTAMP}"

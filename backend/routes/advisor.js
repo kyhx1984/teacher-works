@@ -193,6 +193,9 @@ router.delete('/students/batch', async (req, res) => {
       await db.run('DELETE FROM leaves WHERE student_id = ?', [id]);
       await db.run('DELETE FROM evaluations WHERE student_id = ?', [id]);
       await db.run('DELETE FROM communications WHERE student_id = ?', [id]);
+      await db.run('DELETE FROM recitation_records WHERE student_id = ?', [id]);
+      await db.run('DELETE FROM homework_records WHERE student_id = ?', [id]);
+      await db.run('DELETE FROM recitations WHERE student_id = ?', [id]);
       await db.run('DELETE FROM students WHERE id = ?', [id]);
     }
     sendResponse(res, { ids });
@@ -213,6 +216,10 @@ router.delete('/students/:id', async (req, res) => {
     await db.run('DELETE FROM leaves WHERE student_id = ?', [id]);
     await db.run('DELETE FROM evaluations WHERE student_id = ?', [id]);
     await db.run('DELETE FROM communications WHERE student_id = ?', [id]);
+    // 级联清理背书/作业数据，避免遗留孤儿记录
+    await db.run('DELETE FROM recitation_records WHERE student_id = ?', [id]);
+    await db.run('DELETE FROM homework_records WHERE student_id = ?', [id]);
+    await db.run('DELETE FROM recitations WHERE student_id = ?', [id]);
     await db.run('DELETE FROM students WHERE id = ?', [id]);
     sendResponse(res, { id });
   } catch (err) {
@@ -276,7 +283,7 @@ router.get('/scores', async (req, res) => {
   try {
     const db = await getDb();
     const scores = await db.all(`
-      SELECT s.id, s.subject, s.score, s.exam_name, st.name as student_name
+      SELECT s.id, s.student_id, s.subject, s.score, s.exam_name, st.name as student_name
       FROM scores s
       LEFT JOIN students st ON s.student_id = st.id
       ORDER BY s.exam_name DESC, s.score DESC
