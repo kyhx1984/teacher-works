@@ -134,7 +134,7 @@ router.delete('/resource-categories/:id', async (req, res) => {
     const db = await getDb();
     // 解除资源对该类别的引用，避免悬挂引用
     await db.run('UPDATE resources SET category_id = NULL WHERE category_id = ?', [id]);
-    await db.run('DELETE FROM resource-categories WHERE id = ?', [id]);
+    await db.run('DELETE FROM resource_categories WHERE id = ?', [id]);
     sendResponse(res, { id });
   } catch (err) {
     sendResponse(res, null, err.message, 500);
