@@ -129,6 +129,29 @@ tar -xzf teacher-ops-*.tar.gz
 docker compose restart
 ```
 
+**免本地构建：从 GHCR 拉取预构建镜像**
+
+仓库已通过 GitHub Actions 自动构建多架构镜像（`linux/amd64` + `linux/arm64`）并推送到 GHCR，可跳过本地 `docker build` 直接拉取：
+
+```bash
+# 1. 拉取镜像（公开镜像，无需登录；按服务器 CPU 架构自动匹配）
+docker pull ghcr.io/kyhx1984/teacher-works:latest
+
+# 2. 让 compose 使用拉取的镜像：编辑 docker-compose.yml，
+#    将 services.teacher-ops 下的 build 段（context/dockerfile 两行）替换为：
+#      image: ghcr.io/kyhx1984/teacher-works:latest
+#    其余卷挂载（代码 / 依赖 / 数据 / 日志）与环境变量全部保持不变
+
+# 3. 启动
+docker compose up -d
+```
+
+> **镜像形态说明**：该镜像是「运行环境镜像」（node:22-alpine + 编译工具链 + entrypoint.sh），
+> 业务代码仍通过 bind mount 挂载、后端依赖仍在首次启动时安装到命名卷，因此**升级流程与本地构建完全一致**：
+> 解压新代码 → `docker compose restart`。
+>
+> **可用标签**：`latest`（master 最新）、`master`、`v<版本号>`（发布标签）、`sha-<完整提交号>`（可固定版本便于回滚）。
+
 ### 方式二：源码部署
 
 ```bash
