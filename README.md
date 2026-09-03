@@ -151,6 +151,11 @@ docker compose up -d
 > 解压新代码 → `docker compose restart`。
 >
 > **可用标签**：`latest`（master 最新）、`master`、`v<版本号>`（发布标签）、`sha-<完整提交号>`（可固定版本便于回滚）。
+>
+> ⚠️ **请勿在开发机上挂载源码目录试跑**：容器 entrypoint 会删除 `/app/backend/node_modules`
+> （即宿主机的 `backend/node_modules`）并替换为指向容器依赖卷的符号链接，以规避跨平台原生模块不兼容问题。
+> 这会造成本机 `npm install` 成果丢失、`npm run dev` 失效，需重装依赖恢复。
+> 该镜像面向**服务器部署场景**（代码来自解压的发布包，非开发工作区）。
 
 ### 方式二：源码部署
 
