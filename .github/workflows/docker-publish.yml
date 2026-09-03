@@ -61,6 +61,9 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # 不附带构建证明(attestation)：使镜像清单仅包含 amd64/arm64 两个架构，
+          # 避免旧版 Docker 客户端误选 unknown/unknown 清单，也避免 GHCR 版本列表堆积无标签条目
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
