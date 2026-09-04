@@ -150,7 +150,9 @@ docker compose up -d
 > 业务代码仍通过 bind mount 挂载、后端依赖仍在首次启动时安装到命名卷，因此**升级流程与本地构建完全一致**：
 > 解压新代码 → `docker compose restart`。
 >
-> **可用标签**：`latest`（master 最新）、`master`、`v<版本号>`（发布标签）、`sha-<完整提交号>`（可固定版本便于回滚）。
+> **可用标签**：`latest`（master 最新）、`master`、`sha-<完整提交号>`（可固定版本便于回滚）。
+> 推送 `v*` 格式的发布标签时会额外产出 `v<版本号>`（原样）与 `<版本号>`（去 v 前缀）两个标签；
+> 注：已发布的 `v1.0.0` 早于本 CI 建立，**无对应镜像**，请使用 `latest` 或 `sha-*`。
 >
 > ⚠️ **请勿在开发机上挂载源码目录试跑**：容器 entrypoint 会删除 `/app/backend/node_modules`
 > （即宿主机的 `backend/node_modules`）并替换为指向容器依赖卷的符号链接，以规避跨平台原生模块不兼容问题。
