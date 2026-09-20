@@ -150,7 +150,7 @@
         </div>
         <el-progress
           :percentage="batchProgress.percent"
-          :status="batchProgress.done === batchProgress.total && batchProgress.total > 0 ? 'success' : ''"
+          :status="batchProgress.finished === batchProgress.total && batchProgress.total > 0 ? 'success' : ''"
           style="margin-bottom: 10px"
         />
         <div class="batch-stat">
@@ -158,10 +158,11 @@
           <el-tag size="small" type="success">已完成 {{ batchProgress.done }}</el-tag>
           <el-tag size="small" type="warning">批改中 {{ batchProgress.running }}</el-tag>
           <el-tag size="small" type="danger">失败 {{ batchProgress.failed }}</el-tag>
+          <el-tag v-if="batchProgress.cancelled > 0" size="small" type="info">已停止 {{ batchProgress.cancelled }}</el-tag>
           <el-tag size="small" type="info">待处理 {{ batchProgress.pending }}</el-tag>
         </div>
-        <div v-if="batchProgress.total > 0 && batchProgress.done === batchProgress.total" class="form-tip">
-          全部批改完成。可在下方「批改记录」里逐个查看并采纳到成绩。
+        <div v-if="batchProgress.total > 0 && batchProgress.finished === batchProgress.total" class="form-tip">
+          本卷批改已全部结束（含失败 / 已停止的任务）。可在下方「批改记录」里逐个查看并采纳到成绩。
         </div>
       </div>
     </el-card>
@@ -203,9 +204,15 @@
         </el-table-column>
         <el-table-column prop="model" label="模型" width="150" show-overflow-tooltip />
         <el-table-column prop="created_at" label="批改时间" width="170" />
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="270" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="viewDetail(row)">查看</el-button>
+            <el-button
+              v-if="isRunning(row)"
+              link type="danger" size="small"
+              :loading="cancellingId === row.id"
+              @click="stopTask(row)"
+            >停止</el-button>
             <el-button
               v-if="row.status === 'success'"
               link type="success" size="small"
@@ -248,11 +255,27 @@
           </div>
         </div>
 
+        <!-- 批改进行中：展示「慢但在动」还是「已经卡住」，并给出一键停止入口。
+             只看到「已生成 N 字」是看不出死循环的——字数单调递增，反复吐同一段也在涨；
+             而真卡死时旧实现根本不再更新进度，页面数字冻住，同样看不出死活。 -->
+        <div v-if="isRunning(currentTask)" class="run-box">
+          <el-alert
+            :type="progressView.tone" :closable="false" show-icon
+            :title="progressView.title"
+            :description="progressView.desc"
+          />
+          <el-button
+            class="run-stop" size="small" type="danger" plain
+            :loading="cancellingId === currentTask.id"
+            @click="stopTask(currentTask)"
+          >停止批改</el-button>
+        </div>
         <el-alert
-          v-if="currentTask.status === 'processing' || currentTask.status === 'pending'"
+          v-else-if="currentTask.status === 'cancelled'"
           type="info" :closable="false" show-icon
-          :title="currentTask.progress && currentTask.progress.text ? currentTask.progress.text : 'AI 正在批改中，请稍候…'"
-          description="批改整卷可能需要数分钟，请勿关闭页面；完成后会自动展示结果" style="margin-bottom: 12px"
+          :title="'已停止批改' + (currentTask.error ? '：' + currentTask.error : '')"
+          description="本次批改作废、没有写入成绩。图片仍保留在记录里，可以直接重新发起批改。"
+          style="margin-bottom: 12px"
         />
         <el-alert
           v-else-if="currentTask.status === 'failed'"
@@ -671,11 +694,12 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getAiPresets, getAiConfig, saveAiConfig, testAiConnection,
   addAiProvider, updateAiProvider, deleteAiProvider, activateAiProvider, testAiProvider,
   getAiTasks, createAiTask, createAiBatchTask, getAiTask, adoptAiTask, editAiTaskResult, deleteAiTask, exportAiTask,
+  cancelAiTask,
   getExams, getStudents, getExamAnswerRef, saveExamAnswerRef, getExamRecords
 } from '../../api'
 
@@ -971,10 +995,14 @@ const batchProgress = computed(() => {
   const total = list.length
   const done = list.filter(t => t.status === 'success').length
   const failed = list.filter(t => t.status === 'failed').length
+  // 「已停止」也是终态：必须从「待处理」里扣除，否则老师主动停掉的任务会被永远算作未处理，
+  // 进度条也永远到不了 100%
+  const cancelled = list.filter(t => t.status === 'cancelled').length
   const running = list.filter(t => t.status === 'processing' || t.status === 'pending').length
-  const pending = Math.max(0, total - done - failed - running)
-  const percent = total > 0 ? Math.round(((done + failed) / total) * 100) : 0
-  return { total, done, failed, running, pending, percent }
+  const pending = Math.max(0, total - done - failed - cancelled - running)
+  const finished = done + failed + cancelled
+  const percent = total > 0 ? Math.round((finished / total) * 100) : 0
+  return { total, done, failed, cancelled, running, pending, finished, percent }
 })
 
 // ---------- 任务列表与轮询 ----------
@@ -1165,6 +1193,73 @@ const startDetailPolling = (id) => {
 }
 const stopDetailPolling = () => {
   if (detailTimer) { clearInterval(detailTimer); detailTimer = null }
+}
+
+// ---------- 进度解读 / 主动停止 ----------
+// 进度文案由后端算好（stalled_seconds / repeating 均是服务端权威值），前端只做解读与分级：
+//   · 停滞 30s 起提示、60s 起转为警示色 —— 但长思考/多图视觉编码本来就会几十秒不出字，
+//     所以只是提示，不谎报「卡死」；
+//   · 疑似重复输出只在后端判定命中时提示，且措辞是「疑似」——启发式检测允许误报，
+//     要不要停由老师决定，平台不擅自掐断（项目历史上已被过早中断坑过）。
+const cancellingId = ref(null)
+
+const progressView = computed(() => {
+  const t = currentTask.value
+  if (!t) return { tone: 'info', title: '', desc: '' }
+  const p = t.progress || {}
+  // 排队中（还没轮到）：后端此时不会上报进度，需要单独说明，避免老师以为卡住了
+  if (t.status === 'pending' && !p.stage) {
+    return {
+      tone: 'info',
+      title: '已加入批改队列，等待前面的任务完成…',
+      desc: '为避免多个任务同时抢占显存，批改按顺序逐个执行。若不想再等，可点右侧「停止批改」取消本次任务。'
+    }
+  }
+  const stalled = Number(p.stalled_seconds || 0)
+  const idleLimit = Math.round((Number(p.idle_limit_seconds) || 300) / 60)
+  const totalLimit = Math.round((Number(p.total_limit_seconds) || 2700) / 60)
+  const notes = []
+  if (stalled >= 30) notes.push(`已 ${stalled} 秒没有新输出`)
+  if (p.repeating) notes.push(`疑似重复输出（同一段内容已出现 ${p.repeat_hits} 次）`)
+  const descBits = []
+  if (p.chars) descBits.push(`累计生成 ${p.chars} 字`)
+  descBits.push(`已用时 ${p.elapsed_seconds || 0} 秒`)
+  descBits.push(`平台守护：连续 ${idleLimit} 分钟无输出、或累计 ${totalLimit} 分钟会自动停止`)
+  descBits.push('批改期间请勿关闭页面')
+  return {
+    tone: p.repeating || stalled >= 60 ? 'warning' : 'info',
+    title: (p.text || 'AI 正在批改中，请稍候…') + (notes.length ? `　⚠︎ ${notes.join('；')}` : ''),
+    desc: descBits.join('　·　')
+  }
+})
+
+const stopTask = async (task) => {
+  if (!task || !isRunning(task)) return
+  try {
+    await ElMessageBox.confirm(
+      '停止后本次批改作废，已生成的内容不会保留，也不会写入成绩（试卷图片仍在记录里，随时可以重新发起批改）。确定停止吗？',
+      '停止批改',
+      { type: 'warning', confirmButtonText: '停止批改', cancelButtonText: '继续等待' }
+    )
+  } catch (e) {
+    return // 用户取消
+  }
+  cancellingId.value = task.id
+  try {
+    await cancelAiTask(task.id)
+    ElMessage.success('已停止批改')
+    await loadTasks(true)
+    if (currentTask.value && currentTask.value.id === task.id) {
+      await refreshDetail(task.id)
+      // 后端落库「已停止」可能在响应之后几毫秒才完成：此刻仍是终态才停轮询，
+      // 否则保留轮询让它自然收敛（状态转为终态时会自行停止），避免界面卡在「批改中」
+      if (!isRunning(currentTask.value)) stopDetailPolling()
+    }
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    cancellingId.value = null
+  }
 }
 
 // ---------- 采纳 ----------
@@ -1404,12 +1499,18 @@ const removeProvider = async (p) => {
 }
 
 // ---------- 展示辅助 ----------
+// 「已停止」单独成一档：老师主动取消不等于批改失败，配色与提示都要区分开，
+// 否则批量批改时会把主动停止的卷子误读成「模型出错」。
 const statusTag = (s) => ({
   pending: { type: 'info', label: '等待中' },
   processing: { type: 'warning', label: '批改中' },
   success: { type: 'success', label: '已完成' },
-  failed: { type: 'danger', label: '失败' }
+  failed: { type: 'danger', label: '失败' },
+  cancelled: { type: 'info', label: '已停止' }
 }[s] || { type: 'info', label: s })
+
+// 是否仍在进行中（等待中 / 批改中）：决定是否展示进度与「停止」入口、是否继续轮询
+const isRunning = (t) => !!t && (t.status === 'pending' || t.status === 'processing')
 
 const resultTag = (r) => ({
   correct: { type: 'success', label: '✓ 正确' },
@@ -1496,6 +1597,10 @@ onBeforeUnmount(() => {
 .detail-wrap { height: 74vh; display: flex; flex-direction: column; overflow: hidden; }
 .detail-head { display: flex; flex-wrap: wrap; gap: 24px; padding-bottom: 12px; border-bottom: 1px solid #f0f0f0; margin-bottom: 12px; flex-shrink: 0; }
 .detail-wrap > .el-alert { flex-shrink: 0; }
+/* 进行中进度条 + 停止入口：按钮与提示同一行，老师不用先滚到弹窗底部再找按钮 */
+.run-box { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; flex-shrink: 0; }
+.run-box .el-alert { flex: 1; min-width: 0; }
+.run-stop { flex-shrink: 0; }
 .detail-head-item { display: flex; flex-direction: column; gap: 4px; }
 .detail-head-item .label { font-size: 12px; color: #909399; }
 .detail-head-item .value { font-size: 14px; color: #303133; }

@@ -404,6 +404,37 @@ router.post('/ai-grading/test', async (req, res) => {
 // 与本 Map 在同一进程，可直接读取，从而展示「模型思考中…已生成 N 字」的流式进度。
 const taskProgress = new Map();
 
+// 「主动停止」支持（taskId -> { aborted, controller }）：同样只存内存。
+// 关键设计：控制器在**入队时**就注册，而不是等真正开始跑才注册——
+// 这样排在队列里等待的任务也能被立即停止，不必等前面几个任务跑完才轮到它中止。
+// 单进程部署下与前端轮询在同一进程，所以能直接中断正在进行的那次 HTTP 请求。
+const taskControl = new Map();
+
+function registerTaskControl(taskId) {
+  const entry = { aborted: false, controller: new AbortController() };
+  taskControl.set(String(taskId), entry);
+  return entry;
+}
+
+function readTaskControl(taskId) {
+  return taskControl.get(String(taskId)) || null;
+}
+
+// 把任务落库为「已停止」：与 failed 区分开——失败是意外（值得排查/重试），
+// 已停止是老师主动取消（不该被当成异常统计，也不该误触发失败提示）。
+async function markTaskCancelled(taskId, ctx, reason) {
+  try {
+    await runWithClass(ctx, async () => {
+      const db = await getDb();
+      await db.run(
+        "UPDATE ai_grading_tasks SET status='cancelled', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('pending','processing')",
+        [reason || '已手动停止批改', taskId]
+      );
+    });
+  } catch (e) { /* 落库失败不影响中止本身：前端下次刷新会据实际状态展示 */ }
+  taskProgress.delete(String(taskId));
+}
+
 // 批改任务并发上限：单进程部署下，多任务同时调用本地模型会互相争抢显存与内存，
 // 且每个任务都会把最多 6 张图片一次性读进内存，并发过高极易拖垮整个服务（影响的不只是批改）。
 // 默认串行执行，可用环境变量 AI_GRADING_CONCURRENCY 调大。
@@ -430,16 +461,23 @@ function releaseSlot() {
 
 // 入队执行：占到一个并发名额后再跑，跑完（无论成功失败）必定释放，避免名额泄漏
 async function enqueueGrading(taskId, ctx, config, imageFiles, examContext) {
+  const control = registerTaskControl(taskId);
   await acquireSlot();
   try {
-    await runGradingAsync(taskId, ctx, config, imageFiles, examContext);
+    // 排队期间被停止：不必占用模型资源，直接落库为「已停止」后让出名额
+    if (control.aborted) {
+      await markTaskCancelled(taskId, ctx, '已手动停止批改（排队中取消）');
+      return;
+    }
+    await runGradingAsync(taskId, control, ctx, config, imageFiles, examContext);
   } finally {
+    taskControl.delete(String(taskId));
     releaseSlot();
   }
 }
 
 // 后台异步执行批改：脱离请求上下文，用 runWithClass 透传班级库
-async function runGradingAsync(taskId, ctx, config, imageFiles, examContext) {
+async function runGradingAsync(taskId, control, ctx, config, imageFiles, examContext) {
   if (!ctx) {
     // 班级上下文缺失（仅主库解析异常的降级路径出现）：记录告警便于排查，
     // 行为与其它路由一致（getDb 回退默认班级库），不额外中断任务
@@ -453,9 +491,10 @@ async function runGradingAsync(taskId, ctx, config, imageFiles, examContext) {
     });
 
     const absPaths = imageFiles.map(f => path.join(__dirname, '..', 'uploads', f));
-    // 流式进度回调：把「思考中/作答中，已生成 N 字」写入内存 Map，供前端轮询展示
+    // 流式进度回调：把「思考中/作答中，已生成 N 字」以及停滞时长、疑似重复输出等
+    // 写入内存 Map，供前端轮询展示（进度是瞬态信息，无需落库）
     const onProgress = (p) => { taskProgress.set(String(taskId), { ...p, updated_at: Date.now() }); };
-    const result = await gradePaper(config, absPaths, examContext, onProgress);
+    const result = await gradePaper(config, absPaths, examContext, onProgress, { signal: control.controller.signal });
 
     await withClass(async () => {
       const db = await getDb();
@@ -469,12 +508,17 @@ async function runGradingAsync(taskId, ctx, config, imageFiles, examContext) {
       );
     });
   } catch (err) {
+    // 被老师主动停止时落库为 cancelled（而非 failed）：语义不同，前端展示与批量统计也要分开。
+    // 用条件更新兜住「停止的同一瞬间模型正好返回成功」的竞态——已成功的结果不该被覆盖。
+    const aborted = !!(control && control.aborted);
     try {
       await withClass(async () => {
         const db = await getDb();
         await db.run(
-          "UPDATE ai_grading_tasks SET status='failed', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-          [String(err.message || err).slice(0, 1000), taskId]
+          aborted
+            ? "UPDATE ai_grading_tasks SET status='cancelled', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('pending','processing')"
+            : "UPDATE ai_grading_tasks SET status='failed', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('pending','processing')",
+          [aborted ? '已手动停止批改' : String(err.message || err).slice(0, 1000), taskId]
         );
       });
     } catch (e) { /* 兜底写库失败，忽略 */ }
@@ -967,10 +1011,63 @@ router.post('/ai-grading/tasks/:id/adopt', async (req, res) => {
   }
 });
 
+// POST /ai-grading/tasks/:id/cancel - 手动停止批改（排队中或正在跑的都支持）
+// 做两件事：① 立刻中止对模型的等待并断开连接（随即释放并发名额，让队列后面的任务能开跑）；
+//          ② 把任务标记为「已停止」，前端不再显示「批改中」。
+// 诚实边界：平台侧**一定**立即停止等待；模型侧是否同时停止生成取决于模型服务——
+// LM Studio / Ollama / llama.cpp 等本地推理服务在连接断开后会停止生成，个别云服务或中转
+// 可能把这一轮跑完（不影响本平台，只是仍占用其自身算力）。
+router.post('/ai-grading/tasks/:id/cancel', async (req, res) => {
+  const id = String(req.params.id);
+  try {
+    const db = await getDb();
+    const task = await db.get('SELECT id, status FROM ai_grading_tasks WHERE id = ?', [id]);
+    if (!task) return sendResponse(res, null, '任务不存在', 404);
+
+    const control = readTaskControl(id);
+    if (control) {
+      control.aborted = true;
+      try { control.controller.abort(); } catch (e) { /* 已结束则忽略 */ }
+      // 还在排队（pending）的任务不会马上走到 runGradingAsync 的落库分支，
+      // 这里先写一次状态，让前端立刻看到「已停止」而不是继续显示「等待中」；
+      // 加上 status='pending' 条件，避免把恰好刚跑完/已失败的结果覆盖掉。
+      if (task.status === 'pending') {
+        // 用请求作用域内的 db（已是班级库）直接落库，与删除任务等路由同一口径
+        await db.run(
+          "UPDATE ai_grading_tasks SET status='cancelled', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'",
+          ['已手动停止批改（排队中取消）', id]
+        );
+        taskProgress.delete(id);
+      }
+      return sendResponse(res, { id, status: 'cancelled' }, '已停止批改');
+    }
+
+    // 无控制器：服务重启后遗留在 pending/processing 的任务（进程内状态已随重启丢失，
+    // 实际已无进程在跑），无法再中止，但可以直接修正状态，避免列表里永远挂着「批改中」。
+    if (task.status === 'pending' || task.status === 'processing') {
+      await db.run(
+        "UPDATE ai_grading_tasks SET status='cancelled', error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('pending','processing')",
+        ['服务重启后原批改进程已不存在，已标记为停止', id]
+      );
+      taskProgress.delete(id);
+      return sendResponse(res, { id, status: 'cancelled' }, '已停止批改');
+    }
+    sendResponse(res, null, '该任务已结束，无需停止', 400);
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
 // DELETE /ai-grading/tasks/:id - 删除任务（仅清理本功能新上传的 ai- 图片）
 router.delete('/ai-grading/tasks/:id', async (req, res) => {
   try {
     const db = await getDb();
+    // 删除一个仍在跑的任务时一并中止：否则进程会继续等模型、白烧显存，而结果已无处可存
+    const control = readTaskControl(String(req.params.id));
+    if (control) {
+      control.aborted = true;
+      try { control.controller.abort(); } catch (e) { /* 已结束则忽略 */ }
+    }
     const task = await db.get('SELECT image_path FROM ai_grading_tasks WHERE id = ?', [req.params.id]);
     if (task && task.image_path) {
       task.image_path.split(',').map(s => s.trim()).filter(Boolean).forEach(f => {

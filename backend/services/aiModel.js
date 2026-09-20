@@ -54,6 +54,22 @@ const AUTO_RELAX_RETRY = process.env.AI_GRADING_AUTO_RELAX_RETRY !== '0';
 const RELAX_REASONING_LIMIT = Number(process.env.AI_GRADING_RELAX_REASONING_LIMIT) || 80000;
 // 单次批改的图片总体积上限（MB）：base64 会再膨胀约 33%，设上限避免请求体与内存暴涨
 const MAX_TOTAL_IMAGE_MB = Number(process.env.AI_GRADING_MAX_TOTAL_MB) || 40;
+
+// 进度心跳间隔（毫秒）：即使模型完全没有新输出，也按此间隔上报一次进度。
+// 旧实现「只在新数据到达时上报」有个盲区——模型真的卡死时页面上的字数与用时一起冻住，
+// 老师无法判断是「慢但在动」还是「已经卡住」。改为定时心跳后，停滞时长是持续增长的活数据。
+const PROGRESS_HEARTBEAT_MS = Number(process.env.AI_GRADING_PROGRESS_HEARTBEAT_MS) || 2000;
+
+// 「疑似重复输出」启发式检测：模型陷入退化循环时，典型表现是反复吐同一段文字。
+// 取末尾 REPEAT_TAIL_CHARS 字的窗口，数最后 REPEAT_PROBE_LEN 字这一「探针块」在窗口里出现的次数，
+// 达到 REPEAT_HITS_WARN 次即在前端提示「疑似重复输出」，供老师判断要不要手动停止。
+// 重要：**纯提示，不触发任何自动中止**。项目历史上已被「过早掐断」坑过——正常作答里同样的
+// 长句重复出现极少，但模板化作答（如每道题都以「解：」开头）不排除误报，宁可多提示一次，
+// 也不要把一次正常的十几分钟批改误杀成失败。真正的兜底交给下面的空闲超时与总时长上限。
+const REPEAT_TAIL_CHARS = 4000;
+const REPEAT_PROBE_LEN = 60;
+const REPEAT_HITS_WARN = 4;
+
 // 流式调用的「总时长上限」兜底：空闲超时只在「完全无输出」时生效，若模型持续缓慢吐字则可能
 // 长时间不结束。本地 9B 推理模型实测单次整卷约 15~20 分钟，故默认放宽到 45 分钟；
 // 思考越长越慢，真正想提速应从「关闭思考 / 减少图片张数」入手，而不是掐断长思考。
@@ -592,13 +608,46 @@ function parseGradingResult(text) {
 
 // ---------- 核心调用 ----------
 
+// 「老师主动停止」的统一错误对象。
+// name=Cancelled 便于上层与「空闲超时 / 总时长超限 / 思考失控」区分开（这些在连接层同样表现为
+// AbortError，若不加区分会把手动停止报成「批改超时」）；cancelled=true 则让 callChatCompletion
+// 跳过「部分内容打捞」与「放宽上限重试」——主动停止即作废本次结果，若拿半截输出充当批改结果，
+// 反而会让老师把一个不完整的判分采纳进成绩，比直接失败更危险。
+function cancelledError() {
+  const err = new Error('已手动停止批改');
+  err.name = 'Cancelled';
+  err.cancelled = true;
+  err.relaxable = false;
+  return err;
+}
+
+// 退化循环启发式检测：返回「探针块」在末尾窗口内出现的次数（>= REPEAT_HITS_WARN 视为可疑）。
+// 仅用于生成提示文案，不参与任何自动中止决策。文本太短或探针本身以空白/符号为主时返回 0，
+// 避免把「刚生成几十个字」这种正常状态误报成重复。
+function detectRepeatTail(text) {
+  const s = str(text);
+  if (s.length < REPEAT_PROBE_LEN * 4) return 0;
+  const tail = s.slice(-REPEAT_TAIL_CHARS);
+  const probe = tail.slice(-REPEAT_PROBE_LEN);
+  if (probe.trim().length < REPEAT_PROBE_LEN / 3) return 0;
+  let count = 0;
+  let idx = tail.indexOf(probe);
+  while (idx >= 0 && count < 99) {
+    count += 1;
+    idx = tail.indexOf(probe, idx + 1);
+  }
+  return count;
+}
+
 // 单次 POST：网络层/超时以异常抛出，HTTP 响应统一以 {status, ok, text} 返回，
 // 由 interpretChatResponse 决定成败与是否换端点重试，便于对多个候选复用同一套判定。
 // 用 Node 核心 http/https 发起 POST，而非 fetch：
 // fetch(undici) 有默认 300s 的 headersTimeout/bodyTimeout，非流式调用时服务端要等整段生成
 // 完才发响应头，慢速本地推理模型（>5min）会在 300s 被 undici 提前中断（表现为 "fetch failed"，
 // 服务端日志 "Client disconnected"）。http.request 客户端侧无默认超时，完全由我们的 timeoutMs 掌控。
-function postChatOnce(url, headers, bodyStr, timeoutMs) {
+// signal 可选：老师主动停止时立即销毁请求并结束等待（不接信号到 http 选项，
+// 而由自己的监听器统一走 cancelledError，保证错误对象带 cancelled 标记）。
+function postChatOnce(url, headers, bodyStr, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
     let u;
     try {
@@ -617,6 +666,10 @@ function postChatOnce(url, headers, bodyStr, timeoutMs) {
       if (timer) clearTimeout(timer);
       fn(arg);
     };
+    const cancelManually = () => {
+      settle(reject, cancelledError());
+      try { req.destroy(); } catch (e) { /* 已 settle，销毁结果无影响 */ }
+    };
     const req = lib.request(
       u,
       { method: 'POST', headers: { ...headers, 'Content-Length': Buffer.byteLength(buf) } },
@@ -631,6 +684,11 @@ function postChatOnce(url, headers, bodyStr, timeoutMs) {
       }
     );
     req.on('error', (e) => settle(reject, e));
+    // 主动停止：注册在请求创建之后（确保能 destroy 到真实请求）；已处于中断态则立刻结束，不再发出请求
+    if (signal) {
+      if (signal.aborted) { cancelManually(); return; }
+      signal.addEventListener('abort', cancelManually, { once: true });
+    }
     // 只由这个总超时控制：到点主动 destroy，触发 req 'error'（name=AbortError）
     timer = setTimeout(() => {
       const err = new Error(`调用超时（>${Math.round(timeoutMs / 1000)}s）`);
@@ -648,7 +706,7 @@ function postChatOnce(url, headers, bodyStr, timeoutMs) {
 //       ③ 实时回调 onProgress，让前端显示「思考中/作答中，已生成 N 字」。
 // 兼容降级：若服务端并非 SSE（返回普通 JSON——不支持 stream、或漏填 /v1 被兜底成错误），
 //          以 {kind:'buffered', status, ok, text} 返回，交由 interpretChatResponse 统一判定/换端点。
-function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTimeoutMs = STREAM_TOTAL_TIMEOUT_MS, onProgress = null, reasoningLimit = 0 } = {}) {
+function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTimeoutMs = STREAM_TOTAL_TIMEOUT_MS, onProgress = null, reasoningLimit = 0, signal = null } = {}) {
   return new Promise((resolve, reject) => {
     let u;
     try {
@@ -662,12 +720,15 @@ function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTi
     const startedAt = Date.now();
     let idleTimer = null;
     let totalTimer = null;
+    let heartbeatTimer = null;
     let settled = false;
     let content = '';
     let reasoning = '';
     let finishReason = '';
     let lineBuf = '';
     let lastEmit = 0;
+    let lastReportedChars = 0; // 上次上报时的累计字数，用于算「这段时间新增了多少字」
+    let lastDataAt = startedAt; // 最近一次收到数据块的时间：停滞时长以它为准
     const rawChunks = []; // 非 SSE 时缓存完整响应体
 
     const settle = (fn, arg) => {
@@ -675,6 +736,7 @@ function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTi
       settled = true;
       if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
       if (totalTimer) { clearTimeout(totalTimer); totalTimer = null; }
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
       fn(arg);
     };
     // 中断（空闲超时 / 总时长上限 / 思考失控）统一走这里：
@@ -690,8 +752,19 @@ function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTi
       settle(reject, err);
       try { req.destroy(); } catch (e) { /* 已 settle，销毁结果无影响 */ }
     };
+    // 老师主动停止：立刻结束等待并断开与模型服务的连接。
+    // 与上面的「超时中断」关键区别是 err.cancelled=true —— 上层据此**放弃**已收到的部分内容
+    // 与放宽重试（停止即作废），避免半截输出被当成有效批改结果采纳进成绩。
+    const cancelManually = () => {
+      const err = cancelledError();
+      err.partialContent = content;
+      err.partialReasoning = reasoning;
+      settle(reject, err);
+      try { req.destroy(); } catch (e) { /* 已 settle，销毁结果无影响 */ }
+    };
     // 空闲计时：每收到一块数据就重置；到点仍无数据则判定服务卡死
     const resetIdle = () => {
+      lastDataAt = Date.now();
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         abortWith(`模型已 ${Math.round(idleTimeoutMs / 1000)}s 无任何输出`, 'AbortError');
@@ -705,9 +778,15 @@ function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTi
       lastEmit = now;
       const rChars = reasoning.length;
       const cChars = content.length;
+      const total = rChars + cChars;
       const elapsed = Math.round((now - startedAt) / 1000);
+      // 停滞时长与重复度都在服务端算：前端只负责展示，既不依赖浏览器时钟，
+      // 也不会因为「没有新数据就不上报」而在真卡死时把页面冻住、看不出死活。
+      const stalled = Math.max(0, Math.round((now - lastDataAt) / 1000));
+      const repeatHits = detectRepeatTail(reasoning + content);
+      const repeating = repeatHits >= REPEAT_HITS_WARN;
       const stage = cChars > 0 ? 'answering' : (rChars > 0 ? 'thinking' : 'connecting');
-      const text = stage === 'answering'
+      const base = stage === 'answering'
         ? `模型正在作答…已生成 ${cChars} 字（用时 ${elapsed}s）`
         : stage === 'thinking'
           // 思考超过 3 分钟时顺带给出可操作建议：长思考本身不会让任务失败（平台不限接收长度），
@@ -716,9 +795,30 @@ function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTi
             ? `模型正在思考…已生成 ${rChars} 字（用时 ${elapsed}s）——思考较久，若想提速可在「AI 模型配置」中把思考模式改为「关闭思考」`
             : `模型正在思考…已生成 ${rChars} 字（用时 ${elapsed}s）`)
           : `已连接模型，等待输出…（用时 ${elapsed}s）`;
+      // 「没有新数据就不上报」是旧实现的最大盲区：模型真卡死时页面上的字数与用时一起冻住，
+      // 老师分不清「慢但在动」还是「已经卡住」。这里把停滞时长与疑似重复一并带上，
+      // 由心跳定时上报，让状态始终是活的。
+      const notes = [];
+      if (stalled >= 30) notes.push(`已 ${stalled} 秒无新输出`);
+      if (repeating) notes.push(`疑似重复输出（同一段内容已出现 ${repeatHits} 次）`);
       try {
-        onProgress({ stage, reasoning_chars: rChars, content_chars: cChars, chars: rChars + cChars, elapsed_seconds: elapsed, text });
+        onProgress({
+          stage,
+          reasoning_chars: rChars,
+          content_chars: cChars,
+          chars: total,
+          delta_chars: Math.max(0, total - lastReportedChars), // 距上次上报新增字数：心跳间隔内为 0 即完全停滞
+          elapsed_seconds: elapsed,
+          stalled_seconds: stalled,
+          repeat_hits: repeatHits,
+          repeating,
+          // 两道自动守护线的阈值一并下发，前端据此告诉老师「还要等多久才会自动结束」
+          idle_limit_seconds: Math.round(idleTimeoutMs / 1000),
+          total_limit_seconds: Math.round(totalTimeoutMs / 1000),
+          text: base + (notes.length ? ` · ${notes.join('；')}` : '')
+        });
       } catch (e) { /* 进度回调异常不得影响主流程 */ }
+      lastReportedChars = total;
     };
 
     const req = lib.request(
@@ -730,6 +830,10 @@ function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTi
         const ok = status >= 200 && status < 300;
         // 非 2xx 或非 SSE：缓存整段响应体，按普通响应交上层判定（含 /v1 兜底换端点）
         if (!ok || !/text\/event-stream/i.test(ctype)) {
+          // 这条降级路径拿不到任何增量：服务端会把整段生成完才发响应体。
+          // 此时必须停掉进度心跳——否则「正常但看不见的等待」会被报成「已 N 秒无新输出」，
+          // 让老师误以为卡死而手动停掉一次本来在正常进行的批改。
+          if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
           res.on('data', (c) => { resetIdle(); rawChunks.push(c); });
           res.on('end', () => settle(resolve, { kind: 'buffered', status, ok, text: Buffer.concat(rawChunks).toString('utf8') }));
           res.on('error', (e) => settle(reject, e));
@@ -784,8 +888,17 @@ function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTi
     );
     req.on('error', (e) => settle(reject, e));
     resetIdle(); // 启动首个空闲计时，覆盖「连接 + 首字节」等待
+    // 主动停止：注册在请求创建之后（确保能 destroy 到真实请求）；
+    // 若注册时已处于中断态（任务在排队期间就被停止），立刻结束，连这次请求都不必发出。
+    if (signal) {
+      if (signal.aborted) { cancelManually(); return; }
+      signal.addEventListener('abort', cancelManually, { once: true });
+    }
+    // 进度心跳：无论是否有新数据都定时上报一次，让前端能区分「卡住了」与「只是慢」。
+    // 仅在有进度回调时才开（无回调的场景纯属浪费）。
+    if (onProgress) heartbeatTimer = setInterval(() => emitProgress(true), PROGRESS_HEARTBEAT_MS);
     // 总时长上限兜底：与空闲超时互补——空闲超时防「卡死不吐字」，总时长防「极慢地一直吐字」。
-    // 默认 30 分钟，远超实测的整卷批改耗时，正常批改不会被触发。
+    // 默认 45 分钟，远超实测的整卷批改耗时，正常批改不会被触发。
     totalTimer = setTimeout(() => {
       abortWith(`批改总时长已超过 ${Math.round(totalTimeoutMs / 60000)} 分钟，已停止等待`, 'AbortError');
     }, totalTimeoutMs);
@@ -913,7 +1026,7 @@ function interpretChatResponse({ status, ok, text }, { limitedByPlatform = false
 
 // 调用 Chat Completions 的「单次尝试」：按 buildEndpointCandidates 依次尝试候选端点，命中“端点未识别”
 // 时自动换下一个（例如用户漏填 /v1）；其余错误（超时/网络/鉴权/截断）如实抛出。
-async function callChatAttempt(config, messages, { timeoutMs = 180000, idleTimeoutMs = STREAM_IDLE_TIMEOUT_MS, onProgress = null, stream, reasoningLimit } = {}) {
+async function callChatAttempt(config, messages, { timeoutMs = 180000, idleTimeoutMs = STREAM_IDLE_TIMEOUT_MS, onProgress = null, stream, reasoningLimit, signal = null } = {}) {
   const candidates = buildEndpointCandidates(config.base_url);
   const headers = { 'Content-Type': 'application/json' };
   if (config.api_key) headers['Authorization'] = `Bearer ${config.api_key}`;
@@ -938,7 +1051,7 @@ async function callChatAttempt(config, messages, { timeoutMs = 180000, idleTimeo
     let outcome;
     try {
       if (useStream) {
-        const r = await postChatStream(candidates[i], headers, bodyStr, { idleTimeoutMs, onProgress, reasoningLimit: rLimit });
+        const r = await postChatStream(candidates[i], headers, bodyStr, { idleTimeoutMs, onProgress, reasoningLimit: rLimit, signal });
         // 正常 SSE：用累积的正文 + finish_reason 判定（思考过程一并传入，供正文为空时打捞）；
         // 服务端未按 SSE 返回（不支持 stream / 漏填 /v1 被兜底成错误 JSON）则以 buffered
         // 交 interpret 统一处理，仍能走 /v1 换端点重试
@@ -949,10 +1062,13 @@ async function callChatAttempt(config, messages, { timeoutMs = 180000, idleTimeo
         // 直接交给上层的思考打捞逻辑即可（结果会标注来源，提醒人工核对）。
         if (r.earlyStop && outcome.kind === 'fatal' && outcome.error) outcome.error.relaxable = false;
       } else {
-        const r = await postChatOnce(candidates[i], headers, bodyStr, remaining);
+        const r = await postChatOnce(candidates[i], headers, bodyStr, remaining, signal);
         outcome = interpretChatResponse(r, { limitedByPlatform });
       }
     } catch (e) {
+      // 老师主动停止必须最先识别：连接层对「销毁请求」报的同样是 AbortError，
+      // 若先走下面的超时分支，会把手动停止误报成「批改超时」并附上误导性的重试建议。
+      if ((e && e.cancelled) || (signal && signal.aborted)) throw cancelledError();
       // 中断类错误（AbortError / ReasoningRunaway）已携带 partialContent / partialReasoning /
       // relaxable，这里只重写用户可读的建议文案，**必须原样抛出**以保留这些字段，
       // 否则上层就无法「用已收到的内容兜底」或「放宽上限重试」。
@@ -1021,6 +1137,12 @@ async function callChatCompletion(config, messages, opts = {}) {
     err = e;
   }
 
+  // 主动停止：直接结束，既不打捞部分正文、也不做放宽重试。
+  // 这里是「停止」与「超时中断」的分水岭——超时是意外，能捞多少算多少；
+  // 停止是老师明确表示不要这次结果，此时若把半截输出当作批改结果返回，
+  // 反而会让老师把一个不完整的判分采纳进成绩，比直接失败更危险。
+  if (err && err.cancelled) throw err;
+
   // ① 已有可用的部分正文：不再多等一轮
   const partial = tryPartial(err);
   if (partial) return partial;
@@ -1067,13 +1189,18 @@ async function assertImagesWithinLimit(absPaths) {
 }
 
 // 批改主入口：config + 图片绝对路径数组 + 试卷上下文 -> 结构化批改结果
-async function gradePaper(config, imageAbsPaths, examContext = {}, onProgress = null) {
+// opts.signal：老师主动停止用的 AbortSignal（可选），一路透传到 HTTP 请求。
+async function gradePaper(config, imageAbsPaths, examContext = {}, onProgress = null, opts = {}) {
   if (!Array.isArray(imageAbsPaths) || imageAbsPaths.length === 0) {
     throw new Error('没有可批改的试卷图片');
   }
   if (!config || !config.model) {
     throw new Error('未配置模型名称（model）');
   }
+  const signal = (opts && opts.signal) || null;
+  // 入队后立刻被停止（或在读图期间被停止）的任务：连图片都不必转 base64，直接结束。
+  // 单次批改最多 6 张图、每张最大 10MB，白读一遍纯属浪费内存。
+  if (signal && signal.aborted) throw cancelledError();
   await assertImagesWithinLimit(imageAbsPaths);
 
   // 答案图片：单独转 base64，与试卷图区分。答案图不计入「试卷图总体积」上限判断之外、
@@ -1099,7 +1226,8 @@ async function gradePaper(config, imageAbsPaths, examContext = {}, onProgress = 
     timeoutMs: GRADING_TIMEOUT_MS,
     idleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
     onProgress,
-    state
+    state,
+    signal
   });
   const result = parseGradingResult(raw);
   if (state.reasoning_sourced) {
@@ -1133,6 +1261,8 @@ module.exports = {
   interpretChatResponse,
   postChatOnce,
   postChatStream,
+  cancelledError,
+  detectRepeatTail,
   repairJsonText,
   salvageGradingResult,
   buildResultFromObject,

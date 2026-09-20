@@ -180,6 +180,7 @@ export const getAiTask = (id) => request.get(`/ai-grading/tasks/${id}`)
 export const adoptAiTask = (id, data) => request.post(`/ai-grading/tasks/${id}/adopt`, data)
 export const editAiTaskResult = (id, data) => request.put(`/ai-grading/tasks/${id}/result`, data)
 export const deleteAiTask = (id) => request.delete(`/ai-grading/tasks/${id}`)
+export const cancelAiTask = (id) => request.post(`/ai-grading/tasks/${id}/cancel`)
 export const exportAiTask = (id) => request.get(`/ai-grading/tasks/${id}/export`, { responseType: 'blob' })
 // 标准答案：读取 / 保存（answer_ref 存试卷级，一次录入多次复用）
 export const getExamAnswerRef = (examId) => request.get(`/ai-grading/exams/${examId}/answer-ref`)
