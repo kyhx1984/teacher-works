@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const xlsx = require('xlsx');
 const { getDb, getMainDb, runWithClass, getClassContext } = require('../db');
-const { PROVIDER_PRESETS, DEFAULT_SYSTEM_PROMPT, gradePaper, testConnection, normalizeQuestion, normalizeResult } = require('../services/aiModel');
+const { PROVIDER_PRESETS, DEFAULT_SYSTEM_PROMPT, gradePaper, testConnection, normalizeQuestion, normalizeResult, normalizeConfidence } = require('../services/aiModel');
 
 // AI 批改新上传图片：ai- 前缀标识为本功能独有，删除任务时可安全清理，
 // 不会误删从考试记录复用的原图（沿用现有 uploads/ 磁盘存储风格）
@@ -109,6 +109,9 @@ function normalizeEditedQuestion(q, i) {
     score,
     full_score: full > 0 ? Math.round(full * 100) / 100 : 0,
     result,
+    // AI 自评置信度：老师编辑时原样保留（AI 原始值，不随人工改动重算），
+    // 供「编辑」界面继续显示、以及编辑后仍能在只读视图按把握度排序复核。
+    confidence: normalizeConfidence(q.confidence ?? q['置信度'] ?? q['自信度'] ?? q['把握度']),
     comment: String(q.comment ?? q.feedback ?? q['点评'] ?? q['评语'] ?? '')
   };
 }
@@ -1004,25 +1007,36 @@ router.get('/ai-grading/tasks/:id/export', async (req, res) => {
     if (row.detail) { try { detail = JSON.parse(row.detail) || detail; } catch (e) { /* 用默认 */ } }
     const questions = Array.isArray(detail.questions) ? detail.questions : [];
 
+    // AI 自评把握度汇总：让老师一眼看到「有哪些题值得优先复核」。
+    // 只在确有把握度数据时展示，模型未返回（如用户自定义了提示词）则如实说明。
+    const withConf = questions.filter(q => typeof q.confidence === 'number');
+    const lowConfCount = withConf.filter(q => q.confidence < 60).length;
+    const confSummary = withConf.length
+      ? `平均 ${Math.round(withConf.reduce((s, q) => s + q.confidence, 0) / withConf.length)} 分；把握较低（<60 分）${lowConfCount} 题，建议优先复核`
+      : '模型未返回把握度（本次结果请逐题人工核对）';
+
     const overview = [
       { '项目': '试卷', '内容': row.exam_title || '' },
       { '项目': '学生', '内容': row.student_name || '' },
       { '项目': '批改模型', '内容': row.model || '' },
       { '项目': 'AI 判分', '内容': `${row.total_score ?? ''} / ${row.full_score ?? ''}` },
+      { '项目': 'AI 把握度', '内容': confSummary },
       { '项目': '采纳状态', '内容': row.adopted ? '已采纳' : '未采纳' },
       { '项目': '批改时间', '内容': row.updated_at || row.created_at || '' },
       { '项目': '总评', '内容': row.comment || '' }
     ];
     const qdata = questions.map(q => ({
       '题号': q.no, '题目': q.question, '学生作答': q.student_answer,
-      '得分': q.score, '满分': q.full_score, '判定': resultLabel(q.result), '点评': q.comment
+      '得分': q.score, '满分': q.full_score, '判定': resultLabel(q.result),
+      'AI把握度': typeof q.confidence === 'number' ? q.confidence : '',
+      '点评': q.comment
     }));
 
     const wb = xlsx.utils.book_new();
     const ws1 = xlsx.utils.json_to_sheet(overview);
     ws1['!cols'] = [{ wch: 12 }, { wch: 70 }];
     const ws2 = xlsx.utils.json_to_sheet(qdata);
-    ws2['!cols'] = [{ wch: 8 }, { wch: 32 }, { wch: 32 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 40 }];
+    ws2['!cols'] = [{ wch: 8 }, { wch: 32 }, { wch: 32 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 40 }];
     xlsx.utils.book_append_sheet(wb, ws1, '批改概览');
     xlsx.utils.book_append_sheet(wb, ws2, '逐题明细');
 

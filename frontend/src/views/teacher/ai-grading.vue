@@ -299,6 +299,21 @@
             <div class="detail-right">
               <template v-if="!editing">
                 <div class="section-title">逐题批改（{{ detailQuestions.length }} 题）</div>
+                <!-- 把握度汇总：把「哪几题最不确定」提前告诉老师，用于决定复核顺序 -->
+                <div v-if="confidenceSummary" class="conf-summary">
+                  <div class="conf-line">
+                    <span>AI 自评把握度：平均 <b>{{ confidenceSummary.avg }}%</b></span>
+                    <span class="conf-sub">{{ confidenceSummary.count }}/{{ confidenceSummary.total }} 题给出把握度</span>
+                    <el-tooltip
+                      v-if="confidenceSummary.lowCount"
+                      :content="'把握较低的题号：' + confidenceSummary.lowNos.join('、')"
+                      placement="top"
+                    >
+                      <el-tag type="danger" size="small" effect="plain">把握较低 {{ confidenceSummary.lowCount }} 题</el-tag>
+                    </el-tooltip>
+                  </div>
+                  <div class="form-tip">把握度是 AI 的自评，<b>只反映它对该题结论有多大把握，不代表判分一定准确</b>；低于 60% 的题建议重点核对。</div>
+                </div>
                 <div class="q-list">
                   <div v-for="(g, gi) in groupedQuestions" :key="g.key" class="q-group">
                     <div v-if="groupedQuestions.length > 1 || g.questions.length > 1" class="q-group-head">
@@ -313,6 +328,9 @@
                       <div class="q-head">
                         <span class="q-no">第 {{ q.no }} 题</span>
                         <el-tag :type="resultTag(q.result).type" size="small">{{ resultTag(q.result).label }}</el-tag>
+                        <el-tooltip v-if="hasConfidence(q)" :content="confidenceTip(q.confidence)" placement="top">
+                          <el-tag :type="confidenceTag(q.confidence)" size="small" effect="plain">AI 把握 {{ q.confidence }}%</el-tag>
+                        </el-tooltip>
                         <span class="q-score">{{ q.score }} / {{ q.full_score }}</span>
                       </div>
                       <div class="q-row" v-if="q.question"><span class="q-label">题目</span>{{ q.question }}</div>
@@ -359,6 +377,10 @@
                           <el-option label="错误" value="wrong" />
                           <el-option label="未作答" value="blank" />
                         </el-select>
+                        <!-- 把握度为 AI 原始自评值，只读展示：编辑时据此决定该题是否要重点核对 -->
+                        <el-tooltip v-if="hasConfidence(q)" :content="confidenceTip(q.confidence)" placement="top">
+                          <el-tag :type="confidenceTag(q.confidence)" size="small" effect="plain">AI 把握 {{ q.confidence }}%</el-tag>
+                        </el-tooltip>
                         <div class="edit-score">
                           <span class="form-tip">得分</span>
                           <el-input-number v-model="q.score" :min="0" :max="999" :precision="1" size="small" style="width: 88px" />
@@ -1035,6 +1057,24 @@ const groupedQuestions = computed(() => groupQuestions(detailQuestions.value))
 // 编辑态分组（editForm.questions 是扁平数组，同样按大题聚合并实时汇总）
 const editGrouped = computed(() => groupQuestions(editForm.value.questions))
 
+// 把握度汇总：AI 每题自评的把握程度（0~100）。只统计确有数值的题——
+// 模型未返回（例如老师自定义了提示词）或老任务无该字段时返回 null，整个区块不展示，
+// 不用 0 兜底（凭空给一个数会误导复核判断）。
+const confidenceSummary = computed(() => {
+  const all = detailQuestions.value || []
+  const list = all.filter(q => typeof q.confidence === 'number')
+  if (!list.length) return null
+  const avg = Math.round(list.reduce((s, q) => s + q.confidence, 0) / list.length)
+  const low = list.filter(q => q.confidence < 60)
+  return {
+    avg,
+    count: list.length,
+    total: all.length,
+    lowCount: low.length,
+    lowNos: low.map(q => q.no).filter(Boolean)
+  }
+})
+
 // 原图常驻：左栏单图舞台 + 缩略图切换；右栏题目滚动时左边图片始终可见
 const activeImgIndex = ref(0)
 const imageSrcList = computed(() => taskImages(currentTask.value).map(x => `/uploads/${x}`))
@@ -1070,7 +1110,7 @@ const startEdit = () => {
 }
 const addEditQuestion = () => {
   editForm.value.questions.push({
-    no: '', group: '', group_full_score: 0, question: '', student_answer: '', score: 0, full_score: 0, result: 'unknown', comment: ''
+    no: '', group: '', group_full_score: 0, question: '', student_answer: '', score: 0, full_score: 0, result: 'unknown', confidence: null, comment: ''
   })
 }
 const removeEditQuestion = (q) => {
@@ -1379,6 +1419,19 @@ const resultTag = (r) => ({
   unknown: { type: 'info', label: '? 待判定' }
 }[r] || { type: 'info', label: '? 待判定' })
 
+// ---------- 置信度（AI 自评把握度）展示 ----------
+// 仅有数值时才展示；阈值 80 / 60 与后端导出汇总口径保持一致。
+const hasConfidence = (q) => !!q && typeof q.confidence === 'number'
+const confidenceLevel = (c) => {
+  const n = Number(c)
+  if (!Number.isFinite(n)) return { key: 'unknown', label: '未知' }
+  if (n >= 80) return { key: 'high', label: '高' }
+  if (n >= 60) return { key: 'mid', label: '中' }
+  return { key: 'low', label: '低' }
+}
+const confidenceTag = (c) => ({ high: 'success', mid: 'warning', low: 'danger' }[confidenceLevel(c).key] || 'info')
+const confidenceTip = (c) => `AI 对本题判分的把握程度：${confidenceLevel(c).label}（${c}%）。这是模型自评，不代表判分一定准确；把握低的题建议重点核对。`
+
 const scoreClass = (score, full) => {
   if (score === null || score === undefined) return ''
   const f = Number(full) || 100
@@ -1459,6 +1512,10 @@ onBeforeUnmount(() => {
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
 .q-list { display: flex; flex-direction: column; gap: 8px; }
+.conf-summary { border: 1px solid #ebeef5; border-left: 3px solid #e6a23c; border-radius: 6px; padding: 8px 12px; background: #fffbf5; margin-bottom: 10px; }
+.conf-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: #606266; }
+.conf-line b { color: #e6a23c; }
+.conf-sub { font-size: 12px; color: #909399; }
 .q-group { display: flex; flex-direction: column; gap: 8px; }
 .q-group-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; background: #f5f7fa; border: 1px solid #ebeef5; border-left: 3px solid #409eff; border-radius: 6px; }
 .q-group-head-edit { border-left-color: #67c23a; }

@@ -143,6 +143,13 @@ const DEFAULT_SYSTEM_PROMPT = `你是一名严谨、经验丰富的教师，正�
 - 每道题的 score 不得超过该题 full_score；
 - 保持严格、公正，分数为数字，不要带单位。
 
+置信度要求（每题必填，用于帮助老师快速定位需要复核的题目）：
+- 为每道题额外给出 confidence：0~100 的整数，表示你对自己「这道题的识别与判分结论」的把握程度——100 = 非常确定，60 左右 = 基本确定但有不确定因素，30 以下 = 把握很小；
+- 把握大的情形（给高分，如 85~100）：作答清晰工整、客观题对错分明、或与标准答案逐字/逐要点一致；
+- 把握小的情形（按程度给中低分）：字迹潦草或图片模糊导致作答识别存疑、图意看不清、学生作答是否完整存疑、主观题只能凭经验给分、分值靠推断而非卷面标注、题目内容识别可能有偏差等；
+- confidence 只是你对该题结论的把握程度，**不得**因为置信度高低去修改 score / result / 评语，两者相互独立；
+- 每题都必须输出该字段（实在无法判断时给一个保守的低分，如 30），不要省略、不要写 null。
+
 输出要求（非常重要）：
 - 必须严格输出一个 JSON 对象，不要输出任何解释性文字、前后缀或 Markdown 代码块；
 - questions 数组的每个元素对应一个「最小计分单位」（即一个小题）；total_score 应等于各题 score 之和、full_score 应等于各题 full_score 之和；group_full_score 应等于该大题下各小题 full_score 之和；
@@ -164,6 +171,7 @@ const DEFAULT_SYSTEM_PROMPT = `你是一名严谨、经验丰富的教师，正�
       "score": 数字,             // 本题得分
       "full_score": 数字,        // 本题满分
       "result": "correct",       // 只能是 correct / wrong / partial / blank 之一
+      "confidence": 数字,        // 本题判分的把握程度，0~100 的整数（越高越有把握），必填
       "comment": "本题点评"
     }
   ]
@@ -222,6 +230,44 @@ function normalizeResult(v) {
   if (['partial', 'part', '部分', 'half'].includes(s)) return 'partial';
   if (['blank', 'empty', '未答', '空', 'none'].includes(s)) return 'blank';
   return 'unknown';
+}
+
+// 置信度文字描述兜底映射：模型偶尔不按「0~100 数字」输出，而是给 high/medium/low 之类。
+// 仅作展示兜底，映射值取中性经验值，不追求精确。
+const CONFIDENCE_KEYWORDS = {
+  veryhigh: 95, 'very high': 95, '非常确定': 95, '非常把握': 95,
+  high: 85, '高': 85, '较高': 80, '很确定': 90, '确定': 85,
+  medium: 60, 'medium-high': 70, '中': 60, '中等': 60, '一般': 60, '基本确定': 65,
+  low: 35, '低': 35, '较低': 30, '不确定': 30,
+  verylow: 20, 'very low': 20, '很低': 20
+};
+
+// 数值收敛到 0~100 整数：模型给出的可能是 0~1 的比例（0.9）、0~100 的分值（90）或 90%。
+function clampConfidenceNumber(n) {
+  if (!Number.isFinite(n)) return null;
+  let x = n;
+  // 0~1 视为比例（如 0.9 → 90）；>1 视为已是百分制
+  if (x > 0 && x <= 1) x *= 100;
+  if (x < 0) x = 0;
+  if (x > 100) x = 100;
+  return Math.round(x);
+}
+
+// 置信度归一化：统一收敛为 0~100 的整数。
+// 无法识别（缺失 / 空值 / 非法文本 / 布尔）时返回 null——前端据此不展示该标签，
+// 而不是用 0 或猜测值兜底（凭空给一个数会误导老师判断，比不显示更糟）。
+function normalizeConfidence(v) {
+  if (v === null || v === undefined || typeof v === 'boolean') return null;
+  if (typeof v === 'number') return clampConfidenceNumber(v);
+  if (typeof v === 'object') return null;
+  let s = str(v).trim().toLowerCase();
+  if (!s) return null;
+  const direct = CONFIDENCE_KEYWORDS[s];
+  if (direct !== undefined) return direct;
+  // 去掉百分号、括号注释、空白后再取数：如 "95%" / "90（较高）" / " 85 "
+  s = s.replace(/[（(][^）)]*[）)]/g, '').replace(/[%％\s]/g, '');
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? clampConfidenceNumber(n) : null;
 }
 
 // 归一化 base_url 为完整的 chat/completions 端点（按用户填写原样补全）
@@ -390,6 +436,10 @@ function normalizeQuestion(q, i) {
     score: num(q.score ?? q['得分'] ?? q['分数'], 0),
     full_score: num(q.full_score ?? q.max_score ?? q.fullscore ?? q['满分'], 0),
     result: normalizeResult(q.result ?? q.status ?? q['结果']),
+    // 置信度：模型自评的判分把握程度，归一化为 0~100 整数；缺失/非法时为 null（前端不展示）
+    confidence: normalizeConfidence(
+      q.confidence ?? q.confidence_score ?? q['置信度'] ?? q['自信度'] ?? q['把握度'] ?? q['把握']
+    ),
     comment: str(q.comment ?? q.feedback ?? q['点评'] ?? q['评语'] ?? '')
   });
 }
@@ -1089,6 +1139,7 @@ module.exports = {
   parseGradingResult,
   normalizeQuestion,
   normalizeResult,
+  normalizeConfidence,
   gradePaper,
   testConnection
 };
