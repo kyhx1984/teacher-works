@@ -41,6 +41,10 @@ const AI_GRADING_TASKS_DDL = `
   CREATE TABLE IF NOT EXISTS ai_grading_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     exam_id INTEGER,
+    -- 批改对象来源（通用设计）：'exam'=试卷（默认，存量数据自动归属）、'homework'=作业。
+    -- 作业来源时 source_id 存 homework_tasks.id 且 exam_id 为 NULL，JOIN 不会串到同号试卷。
+    source_type TEXT DEFAULT 'exam',
+    source_id INTEGER,
     student_id INTEGER,
     image_path TEXT,
     status TEXT DEFAULT 'pending',
@@ -90,6 +94,38 @@ async function ensureExamRecordDetailColumn(db) {
   }
 }
 
+// 幂等补齐 ai_grading_tasks 的来源列（source_type/source_id）。
+// 用途：AI 批改从「仅试卷」扩展到「试卷/作业」等多来源。
+// 存量任务 source_type 保持 DEFAULT 'exam'，原有查询与采纳逻辑行为完全不变。
+async function ensureAiGradingSourceColumns(db) {
+  try {
+    const cols = await db.all('PRAGMA table_info(ai_grading_tasks)');
+    if (!Array.isArray(cols) || !cols.length) return; // 表尚不存在（ensureAiGradingSchema 稍后建）
+    if (!cols.some(c => c.name === 'source_type')) {
+      await db.run("ALTER TABLE ai_grading_tasks ADD COLUMN source_type TEXT DEFAULT 'exam'");
+    }
+    if (!cols.some(c => c.name === 'source_id')) {
+      await db.run('ALTER TABLE ai_grading_tasks ADD COLUMN source_id INTEGER');
+    }
+  } catch (e) {
+    // 补列失败不应阻断启动：AI 批改主流程（试卷来源）不受影响
+    console.warn('[db] ai_grading_tasks 来源列补齐失败，作业批改功能不可用：', e && e.message);
+  }
+}
+
+// 幂等补齐 homework_tasks 的 AI 批改参考答案列（answer_ref TEXT，与 exams.answer_ref 同构）。
+// 用途：作业批改的评分依据；失败仅影响作业批改，作业管理主流程（布置/记录/打分）不受影响。
+async function ensureHomeworkAnswerRefColumn(db) {
+  try {
+    const cols = await db.all('PRAGMA table_info(homework_tasks)');
+    if (Array.isArray(cols) && cols.length && !cols.some(c => c.name === 'answer_ref')) {
+      await db.run('ALTER TABLE homework_tasks ADD COLUMN answer_ref TEXT');
+    }
+  } catch (e) {
+    console.warn('[db] homework_tasks.answer_ref 补列失败，作业批改参考答案不可用：', e && e.message);
+  }
+}
+
 // 获取当前请求上下文的班级库连接：
 // 1. 无班级上下文（启动阶段/健康检查等）或默认班级 -> 主库
 // 2. 有上下文 -> 对应班级库文件（按文件路径缓存连接）
@@ -108,6 +144,8 @@ async function getDb() {
   // 既有班级库首次打开：补齐本次升级新增的表/列并复位遗留 AI 任务（幂等，仅进程内首次）
   await ensureAiGradingSchema(conn);
   await ensureExamRecordDetailColumn(conn);
+  await ensureAiGradingSourceColumns(conn);
+  await ensureHomeworkAnswerRefColumn(conn);
   classDbCache.set(ctx.dbFile, conn);
   return conn;
 }
@@ -240,6 +278,8 @@ async function initClassDb(db) {
       content TEXT,
       homework_date TEXT,
       remark TEXT,
+      -- AI 批改参考答案（与 exams.answer_ref 同构：JSON {mode,text,images,parsed}）
+      answer_ref TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -526,6 +566,9 @@ async function initClassDb(db) {
   // （主库/新建班级走此处；升级前已存在的班级库在 getDb 首次打开时补建）
   await ensureAiGradingSchema(db);
   await ensureExamRecordDetailColumn(db);
+  // 新建库走 DDL 已含新列，此处调用幂等无害；主库若为升级前旧库则在此补齐
+  await ensureAiGradingSourceColumns(db);
+  await ensureHomeworkAnswerRefColumn(db);
 
   console.log('Database initialized and tables created/verified.');
 }

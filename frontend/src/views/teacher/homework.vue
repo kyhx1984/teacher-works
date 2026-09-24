@@ -33,10 +33,14 @@
           </template>
         </el-table-column>
         <el-table-column prop="remark" label="备注" width="150" show-overflow-tooltip />
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column label="操作" width="340" fixed="right">
           <template #default="scope">
             <el-button link type="primary" size="small" @click="viewTaskDetail(scope.row)">
               查看详情
+            </el-button>
+            <!-- AI 批改入口：跳转批改页并预选该作业（需已为学生上传作业照片） -->
+            <el-button link type="primary" size="small" @click="goAiGrading(scope.row)">
+              AI批改
             </el-button>
             <el-button link type="success" size="small" @click="exportTask(scope.row)">
               导出Excel
@@ -341,6 +345,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   getHomeworkTasks,
@@ -354,6 +359,13 @@ import {
   exportHomeworkTask,
   getStudents
 } from '../../api'
+
+const router = useRouter()
+
+// 跳转 AI 批改页并预选该作业（发起单份/批量批改均在批改页完成）
+const goAiGrading = (task) => {
+  router.push({ path: '/teacher/ai-grading', query: { source: `homework:${task.id}` } })
+}
 
 // 第一级：任务列表
 const loading = ref(false)

@@ -38,12 +38,20 @@
     <el-card shadow="never" class="mb-16">
       <template #header><span class="card-title">发起 AI 批改</span></template>
       <el-form :inline="true" class="start-form">
-        <el-form-item label="试卷">
-          <el-select v-model="newForm.exam_id" placeholder="选择试卷" filterable style="width: 260px" @change="onExamChange">
-            <el-option v-for="e in exams" :key="e.id" :label="e.title" :value="e.id">
-              <span>{{ e.title }}</span>
-              <el-tag v-if="e.subject" size="small" type="warning" style="margin-left: 6px">{{ e.subject }}</el-tag>
-            </el-option>
+        <el-form-item label="批改对象">
+          <el-select v-model="newForm.source" placeholder="选择试卷或作业" filterable style="width: 260px" @change="onSourceChange">
+            <el-option-group label="试卷">
+              <el-option v-for="e in exams" :key="'exam-' + e.id" :label="e.title" :value="'exam:' + e.id">
+                <span>{{ e.title }}</span>
+                <el-tag v-if="e.subject" size="small" type="warning" style="margin-left: 6px">{{ e.subject }}</el-tag>
+              </el-option>
+            </el-option-group>
+            <el-option-group label="作业">
+              <el-option v-for="h in homeworks" :key="'homework-' + h.id" :label="h.title" :value="'homework:' + h.id">
+                <span>{{ h.title }}</span>
+                <el-tag v-if="h.subject" size="small" type="success" style="margin-left: 6px">{{ h.subject }}</el-tag>
+              </el-option>
+            </el-option-group>
           </el-select>
         </el-form-item>
         <el-form-item label="学生">
@@ -66,7 +74,7 @@
         <el-icon><Plus /></el-icon>
       </el-upload>
       <div class="form-tip">
-        上传该学生的试卷照片（可多张，越清晰越准）。若不上传，将自动使用其在「试卷管理 → 考试记录」中已有的试卷照片。
+        上传该学生的{{ isHomeworkSource ? '作业' : '试卷' }}照片（可多张，越清晰越准）。若不上传，将自动使用其在「{{ isHomeworkSource ? '作业管理' : '试卷管理 → 考试记录' }}」中已有的照片。
         支持 JPG / PNG / WEBP；iPhone 的 HEIC 请先在相册中另存为 JPG。过大的照片会在上传前自动压缩，以缩短等待时间。
       </div>
 
@@ -79,7 +87,7 @@
         <el-alert
           v-if="hasStoredAnswer"
           type="success" :closable="false" show-icon style="margin-bottom: 8px"
-          :title="'该试卷已录入参考答案' + (storedAnswerSummary ? '（' + storedAnswerSummary + '）' : '') + '，本次批改将自动使用；如需修改可重新填写并覆盖。'"
+          :title="'该' + (isHomeworkSource ? '作业' : '试卷') + '已录入参考答案' + (storedAnswerSummary ? '（' + storedAnswerSummary + '）' : '') + '，本次批改将自动使用；如需修改可重新填写并覆盖。'"
         />
         <el-radio-group v-model="answerMode" size="small" style="margin-bottom: 8px">
           <el-radio-button value="none">不提供</el-radio-button>
@@ -203,7 +211,13 @@
       </template>
       <el-table :data="pagedData" v-loading="tasksLoading" style="width: 100%" empty-text="暂无批改记录">
         <el-table-column prop="student_name" label="学生" width="100" />
-        <el-table-column prop="exam_title" label="试卷" min-width="160" show-overflow-tooltip />
+        <el-table-column label="对象" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.source_type === 'homework' ? 'success' : 'warning'" style="margin-right: 6px">
+              {{ row.source_type === 'homework' ? '作业' : '试卷' }}
+            </el-tag>{{ row.exam_title }}
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
             <el-tag :type="statusTag(row.status).type" size="small">
@@ -519,11 +533,16 @@
     </el-dialog>
 
     <!-- 批量批改预检对话框：列出有照片/无照片学生，勾选要批改的范围 -->
-    <el-dialog v-model="batchDialogVisible" title="批量批改整卷" width="640px" top="8vh">
+    <el-dialog v-model="batchDialogVisible" title="批量批改" width="640px" top="8vh">
       <el-form :inline="true" style="margin-bottom: 12px">
-        <el-form-item label="试卷">
-          <el-select v-model="batchForm.exam_id" placeholder="选择试卷" filterable style="width: 320px" @change="loadBatchPreview">
-            <el-option v-for="e in exams" :key="e.id" :label="e.title" :value="e.id" />
+        <el-form-item label="批改对象">
+          <el-select v-model="batchForm.source" placeholder="选择试卷或作业" filterable style="width: 320px" @change="loadBatchPreview">
+            <el-option-group label="试卷">
+              <el-option v-for="e in exams" :key="'exam-' + e.id" :label="e.title" :value="'exam:' + e.id" />
+            </el-option-group>
+            <el-option-group label="作业">
+              <el-option v-for="h in homeworks" :key="'homework-' + h.id" :label="h.title" :value="'homework:' + h.id" />
+            </el-option-group>
           </el-select>
         </el-form-item>
       </el-form>
@@ -532,7 +551,7 @@
         <el-alert
           :type="batchPreview.ready.length ? 'info' : 'warning'"
           :closable="false" show-icon
-          :title="`已为该卷录入照片的学生 ${batchPreview.ready.length} 人，可批量批改；无照片 ${batchPreview.noImage.length} 人将跳过`"
+          :title="`已录入照片的学生 ${batchPreview.ready.length} 人，可批量批改；无照片 ${batchPreview.noImage.length} 人将跳过`"
         />
       </div>
 
@@ -548,11 +567,11 @@
         </el-checkbox-group>
       </div>
       <div v-else-if="batchPreviewLoaded" class="form-tip">
-        该试卷下没有已录入照片的学生。请先在「试卷管理 → 考试记录」里为学生上传试卷照片。
+        该{{ isBatchHomework ? '作业' : '试卷' }}下没有已录入照片的学生。请先在「{{ isBatchHomework ? '作业管理' : '试卷管理 → 考试记录' }}」里为学生上传照片。
       </div>
 
       <div v-if="batchPreviewLoaded && batchPreview.noImage.length" style="margin-top: 12px">
-        <div class="form-tip" style="margin-bottom: 4px">以下学生无试卷照片，将被跳过（可关闭此弹窗去补照片）：</div>
+        <div class="form-tip" style="margin-bottom: 4px">以下学生无照片，将被跳过（可关闭此弹窗去补照片）：</div>
         <div class="batch-noimg">
           <el-tag v-for="s in batchPreview.noImage" :key="s.student_id" size="small" type="info" style="margin: 2px">{{ s.student_name }}</el-tag>
         </div>
@@ -738,22 +757,35 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getAiPresets, getAiConfig, saveAiConfig, testAiConnection,
   addAiProvider, updateAiProvider, deleteAiProvider, activateAiProvider, testAiProvider,
   getAiTasks, createAiTask, createAiBatchTask, getAiTask, adoptAiTask, editAiTaskResult, deleteAiTask, exportAiTask,
   cancelAiTask, cancelAiBatchTask,
-  getExams, getStudents, getExamAnswerRef, saveExamAnswerRef, getExamRecords
+  getExams, getStudents, getExamAnswerRef, saveExamAnswerRef, getExamRecords,
+  getHomeworkTasks, getHomeworkRecords, getHomeworkAnswerRef, saveHomeworkAnswerRef
 } from '../../api'
+
+const route = useRoute()
 
 // ---------- 状态 ----------
 const aiInfo = ref({ enabled: false, providers: [], active_id: '' })
 const presets = ref([])
 const defaultPrompt = ref('')
 const exams = ref([])
+const homeworks = ref([])   // 作业列表（批改对象第二来源）
 const students = ref([])
 const tasks = ref([])
+
+// ---------- 批改对象来源（试卷 / 作业） ----------
+// 选择值统一为 'exam:<id>' / 'homework:<id>' 字符串，一个下拉承接两种来源
+const parseSource = (s) => {
+  if (!s || typeof s !== 'string' || !s.includes(':')) return { type: 'exam', id: null }
+  const [type, id] = s.split(':')
+  return { type: type === 'homework' ? 'homework' : 'exam', id: Number(id) || null }
+}
 
 // ---------- 批改记录：筛选 + 前端分页（与积分管理等页面惯例一致） ----------
 // 筛选条件：学生 / 试卷 / 状态；仅影响表格展示，不改动轮询与批量进度统计（二者仍基于全量 tasks）
@@ -794,7 +826,10 @@ const configSummary = computed(() => {
 })
 
 // ---------- 发起批改 ----------
-const newForm = ref({ exam_id: null, student_id: null })
+const newForm = ref({ source: '', student_id: null })
+
+// 当前选中的批改对象是否为作业（提示文案 / 答案读写分流）
+const isHomeworkSource = computed(() => parseSource(newForm.value.source).type === 'homework')
 const uploadRef = ref()
 const imageFiles = ref([])
 
@@ -861,23 +896,31 @@ const onAnswerFileChange = (file, uploadFiles) => {
   reader.readAsText(f, 'utf-8')
 }
 
-// 选择试卷后加载该试卷已存答案
-const onExamChange = async (examId) => {
+// 选择批改对象后加载其已存答案（试卷/作业各自读取，结构同构）
+const onSourceChange = async (source) => {
   storedAnswer.value = null
-  if (!examId) return
+  const src = parseSource(source)
+  if (!src.id) return
   try {
-    const r = await getExamAnswerRef(examId)
+    const r = src.type === 'homework'
+      ? await getHomeworkAnswerRef(src.id)
+      : await getExamAnswerRef(src.id)
     storedAnswer.value = (r && r.answer_ref) || null
   } catch (e) { /* 拦截器已提示 */ }
 }
 
-// 清空已存答案
+// 清空已存答案（按当前来源分流）
 const clearAnswer = async () => {
-  if (!newForm.value.exam_id) return
+  const src = parseSource(newForm.value.source)
+  if (!src.id) return
   try {
-    await saveExamAnswerRef(newForm.value.exam_id, null)
+    if (src.type === 'homework') {
+      await saveHomeworkAnswerRef(src.id, null)
+    } else {
+      await saveExamAnswerRef(src.id, null)
+    }
     storedAnswer.value = null
-    ElMessage.success('已清空该试卷的参考答案')
+    ElMessage.success(`已清空该${src.type === 'homework' ? '作业' : '试卷'}的参考答案`)
   } catch (e) { /* 拦截器已提示 */ }
 }
 
@@ -944,12 +987,19 @@ const compressImage = (file) => new Promise((resolve) => {
 })
 
 const startGrading = async () => {
-  if (!newForm.value.exam_id) return ElMessage.warning('请选择试卷')
+  const src = parseSource(newForm.value.source)
+  if (!src.id) return ElMessage.warning('请选择试卷或作业')
   if (!newForm.value.student_id) return ElMessage.warning('请选择学生')
   starting.value = true
   try {
     const fd = new FormData()
-    fd.append('exam_id', newForm.value.exam_id)
+    // 来源参数：作业传 source_type/source_id，试卷传 exam_id（与后端兼容老调用方一致）
+    if (src.type === 'homework') {
+      fd.append('source_type', 'homework')
+      fd.append('source_id', src.id)
+    } else {
+      fd.append('exam_id', src.id)
+    }
     fd.append('student_id', newForm.value.student_id)
     // 上传前压缩超大图；顺序与原数组一致，页序不会乱
     const files = []
@@ -989,7 +1039,9 @@ const startGrading = async () => {
 // ---------- 批量批改 ----------
 const batchDialogVisible = ref(false)
 const batching = ref(false)
-const batchForm = ref({ exam_id: null })
+const batchForm = ref({ source: '' })
+// 批量预览选中的来源解析结果（exam / homework），空对象表示未选
+const isBatchHomework = computed(() => parseSource(batchForm.value.source).type === 'homework')
 const batchPreviewLoaded = ref(false)
 const batchPreview = ref({ ready: [], noImage: [] }) // ready: {student_id, student_name}[]; noImage 同理
 const batchSelectedIds = ref([])
@@ -999,26 +1051,29 @@ const batchExamTitle = ref('')
 const batchTaskIds = ref([])             // 本次批量创建的任务 id 集合（用于进度统计，刷新后按 exam 兜底）
 const batchStopping = ref(false)         // 「停止全部」请求进行中
 
-// 打开批量预检：先选试卷，再拉该卷考试记录判断哪些学生有照片
+// 打开批量预检：先选批改对象（承接发起表单已选项），再拉对应记录判断哪些学生有照片
 const openBatch = () => {
-  batchForm.value.exam_id = newForm.value.exam_id || null
+  batchForm.value.source = newForm.value.source || ''
   batchPreviewLoaded.value = false
   batchPreview.value = { ready: [], noImage: [] }
   batchSelectedIds.value = []
   batchDialogVisible.value = true
-  if (batchForm.value.exam_id) loadBatchPreview()
+  if (parseSource(batchForm.value.source).id) loadBatchPreview()
 }
 const loadBatchPreview = async () => {
-  const examId = batchForm.value.exam_id
+  const src = parseSource(batchForm.value.source)
   batchPreviewLoaded.value = false
-  if (!examId) return
+  if (!src.id) return
   try {
-    const records = await getExamRecords(examId)
+    // 试卷取考试记录、作业取作业记录；两者均含 student_id/student_name/image_path
+    const records = src.type === 'homework'
+      ? await getHomeworkRecords(src.id)
+      : await getExamRecords(src.id)
     const ready = []
     const noImage = []
     for (const r of (records || [])) {
       const hasImg = !!(r.image_path && r.image_path.trim())
-      const item = { student_id: r.student_id, student_name: r.student_name || `学生${r.student_id}` }
+      const item = { student_id: r.student_id, student_name: r.student_name || r.name || `学生${r.student_id}` }
       if (hasImg) ready.push(item)
       else noImage.push(item)
     }
@@ -1034,14 +1089,21 @@ const onBatchSelectAll = (val) => {
   batchSelectedIds.value = val ? batchPreview.value.ready.map(s => s.student_id) : []
 }
 const confirmBatch = async () => {
-  if (!batchForm.value.exam_id) return ElMessage.warning('请选择试卷')
+  const src = parseSource(batchForm.value.source)
+  if (!src.id) return ElMessage.warning('请选择试卷或作业')
   if (!batchSelectedIds.value.length) return ElMessage.warning('请至少勾选一名学生')
   batching.value = true
   try {
-    const r = await createAiBatchTask({ exam_id: batchForm.value.exam_id, student_ids: batchSelectedIds.value })
+    const payload = src.type === 'homework'
+      ? { source_type: 'homework', source_id: src.id, student_ids: batchSelectedIds.value }
+      : { exam_id: src.id, student_ids: batchSelectedIds.value }
+    const r = await createAiBatchTask(payload)
     batchDialogVisible.value = false
-    const exam = exams.value.find(e => e.id === batchForm.value.exam_id)
-    batchExamTitle.value = exam ? exam.title : ''
+    // 进度面板标题：优先本次批量对象名（试卷或作业），找不到时留空走兜底
+    const sourceObj = src.type === 'homework'
+      ? homeworks.value.find(h => h.id === src.id)
+      : exams.value.find(e => e.id === src.id)
+    batchExamTitle.value = sourceObj ? sourceObj.title : ''
     batchTaskIds.value = r.task_ids || []
     batchVisible.value = true
     // 组装提示
@@ -1673,9 +1735,16 @@ onMounted(async () => {
   } catch (e) { /* 拦截器已提示 */ }
   loadConfig()
   try { exams.value = await getExams() } catch (e) { /* ignore */ }
+  try { homeworks.value = await getHomeworkTasks() } catch (e) { /* ignore */ }
   try { students.value = await getStudents() } catch (e) { /* ignore */ }
   await loadTasks()
   if (tasks.value.some(t => t.status === 'pending' || t.status === 'processing')) startPolling()
+  // 支持从「作业管理」跳转预选：/teacher/ai-grading?source=homework:<id>
+  const presetSource = route.query.source
+  if (presetSource && parseSource(presetSource).id) {
+    newForm.value.source = presetSource
+    onSourceChange(presetSource)
+  }
 })
 onBeforeUnmount(() => {
   stopPolling()

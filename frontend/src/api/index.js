@@ -189,3 +189,6 @@ export const exportAiTask = (id) => request.get(`/ai-grading/tasks/${id}/export`
 // 标准答案：读取 / 保存（answer_ref 存试卷级，一次录入多次复用）
 export const getExamAnswerRef = (examId) => request.get(`/ai-grading/exams/${examId}/answer-ref`)
 export const saveExamAnswerRef = (examId, answerRef) => request.put(`/ai-grading/exams/${examId}/answer-ref`, { answer_ref: answerRef })
+// 作业批改的标准答案（与试卷同构，存作业级 homework_tasks.answer_ref）
+export const getHomeworkAnswerRef = (homeworkId) => request.get(`/ai-grading/homework/${homeworkId}/answer-ref`)
+export const saveHomeworkAnswerRef = (homeworkId, answerRef) => request.put(`/ai-grading/homework/${homeworkId}/answer-ref`, { answer_ref: answerRef })

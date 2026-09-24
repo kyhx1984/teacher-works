@@ -613,18 +613,30 @@ async function getExamAnswerRef(db, examId) {
   try { return JSON.parse(row.answer_ref); } catch (e) { return null; }
 }
 
+// 按来源读取已录入的参考答案（试卷/作业同构），失败或未录入均返回 null
+async function getSourceAnswerRef(db, sourceId, isHomework) {
+  const row = isHomework
+    ? await db.get('SELECT answer_ref FROM homework_tasks WHERE id = ?', [sourceId])
+    : await db.get('SELECT answer_ref FROM exams WHERE id = ?', [sourceId]);
+  if (!row || !row.answer_ref) return null;
+  try { return JSON.parse(row.answer_ref); } catch (e) { return null; }
+}
+
 // GET /ai-grading/tasks - 任务列表（不含 detail 大字段）
 router.get('/ai-grading/tasks', async (req, res) => {
   try {
     const db = await getDb();
     const { exam_id, student_id } = req.query;
     let sql = `
-      SELECT t.id, t.exam_id, t.student_id, t.image_path, t.status, t.total_score, t.full_score,
+      SELECT t.id, t.exam_id, t.source_type, t.student_id, t.image_path, t.status, t.total_score, t.full_score,
              t.comment, t.model, t.error, t.adopted, t.adopted_at, t.created_at, t.updated_at,
-             s.name AS student_name, e.title AS exam_title, e.subject AS exam_subject
+             s.name AS student_name,
+             COALESCE(e.title, ht.title) AS exam_title,
+             COALESCE(e.subject, ht.subject) AS exam_subject
       FROM ai_grading_tasks t
       LEFT JOIN students s ON t.student_id = s.id
       LEFT JOIN exams e ON t.exam_id = e.id
+      LEFT JOIN homework_tasks ht ON t.source_type = 'homework' AND t.source_id = ht.id
       WHERE 1=1
     `;
     const params = [];
@@ -645,6 +657,8 @@ router.get('/ai-grading/tasks', async (req, res) => {
 // POST /ai-grading/tasks - 创建批改任务（新上传图片，或复用该生该考试已有照片）
 // 支持附带标准答案：answer_text（纯文本）或 answer_images（答案图片，走 answer_images 字段）。
 // 答案存试卷级（exams.answer_ref），一次录入、后续批改自动复用。
+// 作业批改：传 source_type='homework' + source_id（作业 id）即可，与试卷共用同一套
+// 图片复用 / 答案复用 / 并发队列 / 重复保护，答案存作业级（homework_tasks.answer_ref）。
 router.post('/ai-grading/tasks', uploadImages, async (req, res) => {
   try {
     const { enabled, config } = await loadActiveConfig();
@@ -653,12 +667,22 @@ router.post('/ai-grading/tasks', uploadImages, async (req, res) => {
       return sendResponse(res, null, '模型未正确配置（缺少服务地址或模型名），请先完成配置', 400);
     }
 
-    const { exam_id, student_id } = req.body;
-    if (!exam_id || !student_id) return sendResponse(res, null, 'exam_id 与 student_id 不能为空', 400);
+    const { exam_id, student_id, source_type, source_id } = req.body;
+    // 来源解析：homework 走作业链路；其余（含不传）一律按试卷处理，兼容既有调用方
+    const isHomework = source_type === 'homework' && source_id;
+    if (!student_id) return sendResponse(res, null, 'student_id 不能为空', 400);
+    if (!isHomework && !exam_id) return sendResponse(res, null, 'exam_id 与 student_id 不能为空', 400);
 
     const db = await getDb();
-    const exam = await db.get('SELECT id, title, subject, content, answer_ref FROM exams WHERE id = ?', [exam_id]);
-    if (!exam) return sendResponse(res, null, '试卷不存在', 404);
+    // 来源对象：试卷或作业（作业取 title/subject/content/answer_ref，与 exams 同构）
+    let sourceObj = null;
+    if (isHomework) {
+      sourceObj = await db.get('SELECT id, title, subject, content, answer_ref FROM homework_tasks WHERE id = ?', [source_id]);
+      if (!sourceObj) return sendResponse(res, null, '作业不存在', 404);
+    } else {
+      sourceObj = await db.get('SELECT id, title, subject, content, answer_ref FROM exams WHERE id = ?', [exam_id]);
+      if (!sourceObj) return sendResponse(res, null, '试卷不存在', 404);
+    }
     const student = await db.get('SELECT id, name FROM students WHERE id = ?', [student_id]);
     if (!student) return sendResponse(res, null, '学生不存在', 404);
 
@@ -667,7 +691,7 @@ router.post('/ai-grading/tasks', uploadImages, async (req, res) => {
       ? req.files.answer_images.map(f => f.filename)
       : [];
 
-    // 解析本次提交的答案（文本 + 图片）；未提交则回退试卷级已存答案
+    // 解析本次提交的答案（文本 + 图片）；未提交则回退来源级已存答案
     const answerTextRaw = String(req.body.answer_text || '').trim();
     let answerRef = null;
     if (answerTextRaw || answerImages.length) {
@@ -677,51 +701,68 @@ router.post('/ai-grading/tasks', uploadImages, async (req, res) => {
         images: answerImages
       });
       if (answerRef) {
-        // 持久化到试卷级：一次录入、多次批改复用。答案文本可留空（仅图片），图片可留空（仅文本）。
-        await db.run('UPDATE exams SET answer_ref = ? WHERE id = ?', [JSON.stringify(answerRef), exam_id]);
+        // 持久化到来源级：一次录入、多次批改复用。答案文本可留空（仅图片），图片可留空（仅文本）。
+        if (isHomework) {
+          await db.run('UPDATE homework_tasks SET answer_ref = ? WHERE id = ?', [JSON.stringify(answerRef), source_id]);
+        } else {
+          await db.run('UPDATE exams SET answer_ref = ? WHERE id = ?', [JSON.stringify(answerRef), exam_id]);
+        }
       }
     }
     if (!answerRef) {
-      // 本次未提供答案，读取试卷级已存答案（复用）
-      answerRef = await getExamAnswerRef(db, exam_id);
+      // 本次未提供答案，读取来源级已存答案（复用）
+      answerRef = await getSourceAnswerRef(db, isHomework ? source_id : exam_id, isHomework);
     }
 
-    // 重复提交保护：同一学生同一试卷已有在跑的任务时直接复用。
+    // 重复提交保护：同一学生同一来源已有在跑的任务时直接复用。
     // 老师连点两次就会发起两次完整调用（本地模型一次要几分钟），既浪费也更容易把服务压垮。
+    const dupCond = isHomework
+      ? "source_type = 'homework' AND source_id = ?"
+      : "source_type = 'exam' AND exam_id = ?";
     const dup = await db.get(
-      "SELECT id, status FROM ai_grading_tasks WHERE exam_id = ? AND student_id = ? AND status IN ('pending','processing') ORDER BY id DESC LIMIT 1",
-      [exam_id, student_id]
+      `SELECT id, status FROM ai_grading_tasks WHERE ${dupCond} AND student_id = ? AND status IN ('pending','processing') ORDER BY id DESC LIMIT 1`,
+      isHomework ? [source_id, student_id] : [exam_id, student_id]
     );
     if (dup) {
       cleanupUploaded(req.files && req.files.images);
       cleanupUploaded(req.files && req.files.answer_images);
-      return sendResponse(res, { id: dup.id, status: dup.status, reused: true }, '该学生的这份试卷正在批改中，已为你打开已有任务');
+      return sendResponse(res, { id: dup.id, status: dup.status, reused: true },
+        `该学生的这份${isHomework ? '作业' : '试卷'}正在批改中，已为你打开已有任务`);
     }
 
-    // 图片来源：优先本次上传；否则复用该生该考试记录里已有的试卷照片
+    // 图片来源：优先本次上传；否则复用该生该来源记录里已有的照片
+    // （exam_records 与 homework_records 的 image_path 均为「逗号分隔多张文件名」，格式完全一致）
     let imageFiles = [];
     if (req.files && req.files.images && req.files.images.length) {
       imageFiles = req.files.images.map(f => f.filename);
     } else {
-      const rec = await db.get('SELECT image_path FROM exam_records WHERE exam_id = ? AND student_id = ?', [exam_id, student_id]);
+      const rec = isHomework
+        ? await db.get('SELECT image_path FROM homework_records WHERE task_id = ? AND student_id = ?', [source_id, student_id])
+        : await db.get('SELECT image_path FROM exam_records WHERE exam_id = ? AND student_id = ?', [exam_id, student_id]);
       if (rec && rec.image_path) imageFiles = rec.image_path.split(',').map(s => s.trim()).filter(Boolean);
     }
     if (!imageFiles.length) {
       cleanupUploaded(req.files && req.files.answer_images);
-      return sendResponse(res, null, '请上传试卷图片，或确保该学生已有试卷照片', 400);
+      return sendResponse(res, null, `请上传${isHomework ? '作业' : '试卷'}图片，或确保该学生已有${isHomework ? '作业' : '试卷'}照片`, 400);
     }
 
     const result = await db.run(
-      `INSERT INTO ai_grading_tasks (exam_id, student_id, image_path, status, model) VALUES (?, ?, ?, 'pending', ?)`,
-      [exam_id, student_id, imageFiles.join(','), config.model]
+      isHomework
+        ? `INSERT INTO ai_grading_tasks (exam_id, source_type, source_id, student_id, image_path, status, model) VALUES (NULL, 'homework', ?, ?, ?, 'pending', ?)`
+        : `INSERT INTO ai_grading_tasks (exam_id, source_type, source_id, student_id, image_path, status, model) VALUES (?, 'exam', NULL, ?, ?, 'pending', ?)`,
+      isHomework
+        ? [source_id, student_id, imageFiles.join(','), config.model]
+        : [exam_id, student_id, imageFiles.join(','), config.model]
     );
     const taskId = result.lastID;
 
     const ctx = getClassContext();
+    // examContext 与来源无关（title/subject/content/answer_ref 四元组作业完全同构），
+    // 批改引擎（队列/模型调用/进度/守护）无需感知来源
     const examContext = {
-      title: exam.title,
-      subject: exam.subject,
-      content: examContentToText(exam.content),
+      title: sourceObj.title,
+      subject: sourceObj.subject,
+      content: examContentToText(sourceObj.content),
       answer_ref: answerRef
     };
     // 后台执行，不阻塞响应（LLM 调用耗时长，前端改为轮询任务状态）；经队列限流后启动
@@ -733,12 +774,13 @@ router.post('/ai-grading/tasks', uploadImages, async (req, res) => {
   }
 });
 
-// POST /ai-grading/tasks/batch - 批量批改：一次把某张试卷下「已有试卷照片」的学生全部发起批改。
+// POST /ai-grading/tasks/batch - 批量批改：一次把某试卷/作业下「已有照片」的学生全部发起批改。
 // 与单任务创建共用同一套能力（图片复用 / 答案复用 / 并发队列 / 重复保护），仅多一层「逐个学生遍历」。
+// 作业批量：传 source_type='homework' + source_id 即可，学生照片取 homework_records.image_path。
 // 关键安全边界：
 //  1) 无照片的学生绝不建任务（只返回名单，由前端提示老师去补照片）；
 //  2) 已有 pending/processing 任务的学生直接跳过（复用现有 dup 保护，避免重复烧钱/重复批改）；
-//  3) 答案（answer_ref）为试卷级，自动复用到每个学生，无需重复录入。
+//  3) 答案（answer_ref）为来源级，自动复用到每个学生，无需重复录入。
 router.post('/ai-grading/tasks/batch', async (req, res) => {
   try {
     const { enabled, config } = await loadActiveConfig();
@@ -747,29 +789,43 @@ router.post('/ai-grading/tasks/batch', async (req, res) => {
       return sendResponse(res, null, '模型未正确配置（缺少服务地址或模型名），请先完成配置', 400);
     }
 
-    const { exam_id, student_ids } = req.body || {};
-    if (!exam_id) return sendResponse(res, null, 'exam_id 不能为空', 400);
+    const { exam_id, student_ids, source_type, source_id } = req.body || {};
+    const isHomework = source_type === 'homework' && source_id;
+    if (!isHomework && !exam_id) return sendResponse(res, null, 'exam_id 不能为空', 400);
 
     const db = await getDb();
-    const exam = await db.get('SELECT id, title, subject, content, answer_ref FROM exams WHERE id = ?', [exam_id]);
-    if (!exam) return sendResponse(res, null, '试卷不存在', 404);
+    let sourceObj = null;
+    if (isHomework) {
+      sourceObj = await db.get('SELECT id, title, subject, content, answer_ref FROM homework_tasks WHERE id = ?', [source_id]);
+      if (!sourceObj) return sendResponse(res, null, '作业不存在', 404);
+    } else {
+      sourceObj = await db.get('SELECT id, title, subject, content, answer_ref FROM exams WHERE id = ?', [exam_id]);
+      if (!sourceObj) return sendResponse(res, null, '试卷不存在', 404);
+    }
 
-    // 答案：批量场景复用试卷级已存答案（若有）；本次无答案输入口，保持与单任务「复用已存答案」一致
-    const answerRef = await getExamAnswerRef(db, exam_id);
+    // 答案：批量场景复用来源级已存答案（若有）；本次无答案输入口，保持与单任务「复用已存答案」一致
+    const answerRef = await getSourceAnswerRef(db, isHomework ? source_id : exam_id, isHomework);
     const examContext = {
-      title: exam.title,
-      subject: exam.subject,
-      content: examContentToText(exam.content),
+      title: sourceObj.title,
+      subject: sourceObj.subject,
+      content: examContentToText(sourceObj.content),
       answer_ref: answerRef
     };
 
-    // 学生范围：未指定 student_ids 时，取该试卷考试记录里的全部学生（即「已录入该考试」的学生）
+    // 学生范围：未指定 student_ids 时，取该来源记录里的全部学生（试卷=考试记录、作业=作业记录）
     let targets;
     if (Array.isArray(student_ids) && student_ids.length) {
       const ids = [...new Set(student_ids.map(x => Number(x)).filter(Number.isFinite))];
       if (!ids.length) return sendResponse(res, null, '学生列表为空', 400);
       const ph = ids.map(() => '?').join(',');
       targets = await db.all(`SELECT s.id, s.name FROM students s WHERE s.id IN (${ph})`, ids);
+    } else if (isHomework) {
+      targets = await db.all(`
+        SELECT s.id, s.name FROM homework_records hr
+        JOIN students s ON hr.student_id = s.id
+        WHERE hr.task_id = ?
+        ORDER BY s.id ASC
+      `, [source_id]);
     } else {
       targets = await db.all(`
         SELECT s.id, s.name FROM exam_records er
@@ -787,18 +843,23 @@ router.post('/ai-grading/tasks/batch', async (req, res) => {
 
     for (const stu of targets) {
       const sid = stu.id;
-      // 重复保护：该生该卷已有在跑任务则跳过（与单任务创建口径一致）
+      // 重复保护：该生该来源已有在跑任务则跳过（与单任务创建口径一致）
+      const dupCond = isHomework
+        ? "source_type = 'homework' AND source_id = ?"
+        : "source_type = 'exam' AND exam_id = ?";
       const dup = await db.get(
-        "SELECT id, status FROM ai_grading_tasks WHERE exam_id = ? AND student_id = ? AND status IN ('pending','processing') ORDER BY id DESC LIMIT 1",
-        [exam_id, sid]
+        `SELECT id, status FROM ai_grading_tasks WHERE ${dupCond} AND student_id = ? AND status IN ('pending','processing') ORDER BY id DESC LIMIT 1`,
+        isHomework ? [source_id, sid] : [exam_id, sid]
       );
       if (dup) {
         skipped_running.push({ id: sid, name: stu.name, task_id: dup.id });
         continue;
       }
 
-      // 图片来源：复用该生该考试记录里已有的试卷照片（批量场景不上传新图）
-      const rec = await db.get('SELECT image_path FROM exam_records WHERE exam_id = ? AND student_id = ?', [exam_id, sid]);
+      // 图片来源：复用该生该来源记录里已有的照片（批量场景不上传新图）
+      const rec = isHomework
+        ? await db.get('SELECT image_path FROM homework_records WHERE task_id = ? AND student_id = ?', [source_id, sid])
+        : await db.get('SELECT image_path FROM exam_records WHERE exam_id = ? AND student_id = ?', [exam_id, sid]);
       const imageFiles = rec && rec.image_path
         ? rec.image_path.split(',').map(s => s.trim()).filter(Boolean)
         : [];
@@ -808,8 +869,12 @@ router.post('/ai-grading/tasks/batch', async (req, res) => {
       }
 
       const result = await db.run(
-        `INSERT INTO ai_grading_tasks (exam_id, student_id, image_path, status, model) VALUES (?, ?, ?, 'pending', ?)`,
-        [exam_id, sid, imageFiles.join(','), config.model]
+        isHomework
+          ? `INSERT INTO ai_grading_tasks (exam_id, source_type, source_id, student_id, image_path, status, model) VALUES (NULL, 'homework', ?, ?, ?, 'pending', ?)`
+          : `INSERT INTO ai_grading_tasks (exam_id, source_type, source_id, student_id, image_path, status, model) VALUES (?, 'exam', NULL, ?, ?, 'pending', ?)`,
+        isHomework
+          ? [source_id, sid, imageFiles.join(','), config.model]
+          : [exam_id, sid, imageFiles.join(','), config.model]
       );
       const taskId = result.lastID;
       created.push({ id: sid, name: stu.name, task_id: taskId });
@@ -863,15 +928,50 @@ router.put('/ai-grading/exams/:id/answer-ref', async (req, res) => {
   }
 });
 
+// GET /ai-grading/homework/:id/answer-ref - 读取某份作业已录入的标准答案（与试卷端点同构）
+router.get('/ai-grading/homework/:id/answer-ref', async (req, res) => {
+  try {
+    const db = await getDb();
+    const answerRef = await getSourceAnswerRef(db, req.params.id, true);
+    sendResponse(res, { answer_ref: answerRef });
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
+// PUT /ai-grading/homework/:id/answer-ref - 保存/清空某份作业的标准答案（与试卷端点同构）
+// body: { answer_ref: {...} } 保存；{ answer_ref: null } 清空
+router.put('/ai-grading/homework/:id/answer-ref', async (req, res) => {
+  try {
+    const db = await getDb();
+    const hw = await db.get('SELECT id FROM homework_tasks WHERE id = ?', [req.params.id]);
+    if (!hw) return sendResponse(res, null, '作业不存在', 404);
+    const body = req.body || {};
+    if (body.answer_ref === null || body.answer_ref === undefined) {
+      await db.run('UPDATE homework_tasks SET answer_ref = NULL WHERE id = ?', [req.params.id]);
+      return sendResponse(res, { answer_ref: null }, '答案已清空');
+    }
+    const answerRef = normalizeAnswerRef(body.answer_ref);
+    if (!answerRef) return sendResponse(res, null, '答案内容为空或格式不正确', 400);
+    await db.run('UPDATE homework_tasks SET answer_ref = ? WHERE id = ?', [JSON.stringify(answerRef), req.params.id]);
+    sendResponse(res, { answer_ref: answerRef }, '答案已保存');
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
 // GET /ai-grading/tasks/:id - 任务详情（解析 detail）
 router.get('/ai-grading/tasks/:id', async (req, res) => {
   try {
     const db = await getDb();
     const row = await db.get(`
-      SELECT t.*, s.name AS student_name, e.title AS exam_title, e.subject AS exam_subject
+      SELECT t.*, s.name AS student_name,
+             COALESCE(e.title, ht.title) AS exam_title,
+             COALESCE(e.subject, ht.subject) AS exam_subject
       FROM ai_grading_tasks t
       LEFT JOIN students s ON t.student_id = s.id
       LEFT JOIN exams e ON t.exam_id = e.id
+      LEFT JOIN homework_tasks ht ON t.source_type = 'homework' AND t.source_id = ht.id
       WHERE t.id = ?
     `, [req.params.id]);
     if (!row) return sendResponse(res, null, '任务不存在', 404);
@@ -973,39 +1073,54 @@ router.post('/ai-grading/tasks/:id/adopt', async (req, res) => {
       } catch (e) { /* 明细异常不影响采纳主流程 */ }
     }
 
-    // 写入/更新考试记录
-    let rec = await db.get('SELECT id FROM exam_records WHERE exam_id = ? AND student_id = ?', [task.exam_id, task.student_id]);
+    // 写入/更新来源记录：试卷→考试记录（并同步成绩分析）；作业→作业记录（分数+评语）
+    const isHomework = task.source_type === 'homework';
     let recId;
-    if (rec) {
-      recId = rec.id;
-      if (detailJson) {
-        await db.run('UPDATE exam_records SET score = ?, comment = ?, detail = ? WHERE id = ?', [score, comment, detailJson, recId]);
+    if (isHomework) {
+      // 作业采纳：写 homework_records（score + remark 评语）。
+      // 逐题明细（detail）作业记录表没有对应列，仅保留在批改任务详情中回看，不落作业记录。
+      const hwRec = await db.get('SELECT id FROM homework_records WHERE task_id = ? AND student_id = ?', [task.source_id, task.student_id]);
+      if (hwRec) {
+        recId = hwRec.id;
+        await db.run('UPDATE homework_records SET score = ?, remark = ? WHERE id = ?', [score, comment, recId]);
       } else {
-        await db.run('UPDATE exam_records SET score = ?, comment = ? WHERE id = ?', [score, comment, recId]);
+        const r = await db.run('INSERT INTO homework_records (task_id, student_id, score, remark) VALUES (?, ?, ?, ?)',
+          [task.source_id, task.student_id, score, comment]);
+        recId = r.lastID;
       }
     } else {
-      const r = await db.run('INSERT INTO exam_records (exam_id, student_id, score, comment, detail) VALUES (?, ?, ?, ?, ?)',
-        [task.exam_id, task.student_id, score, comment, detailJson]);
-      recId = r.lastID;
-    }
+      let rec = await db.get('SELECT id FROM exam_records WHERE exam_id = ? AND student_id = ?', [task.exam_id, task.student_id]);
+      if (rec) {
+        recId = rec.id;
+        if (detailJson) {
+          await db.run('UPDATE exam_records SET score = ?, comment = ?, detail = ? WHERE id = ?', [score, comment, detailJson, recId]);
+        } else {
+          await db.run('UPDATE exam_records SET score = ?, comment = ? WHERE id = ?', [score, comment, recId]);
+        }
+      } else {
+        const r = await db.run('INSERT INTO exam_records (exam_id, student_id, score, comment, detail) VALUES (?, ?, ?, ?, ?)',
+          [task.exam_id, task.student_id, score, comment, detailJson]);
+        recId = r.lastID;
+      }
 
-    // 同步成绩分析（scores 表），逻辑与 teacher.js 更新考试记录一致
-    const record = await db.get(
-      'SELECT er.student_id, er.score, e.title AS exam_title, e.subject AS exam_subject FROM exam_records er LEFT JOIN exams e ON er.exam_id = e.id WHERE er.id = ?',
-      [recId]
-    );
-    if (record && record.exam_title) {
-      await db.run('DELETE FROM scores WHERE exam_name = ? AND student_id = ?', [record.exam_title, record.student_id]);
-      if (record.score !== null && record.score !== undefined && record.score !== '') {
-        const existSubject = await db.get("SELECT subject FROM scores WHERE exam_name = ? AND subject IS NOT NULL AND subject != ? LIMIT 1", [record.exam_title, '']);
-        const subject = record.exam_subject || (existSubject ? existSubject.subject : '综合');
-        await db.run('INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
-          [record.student_id, subject, record.score, record.exam_title]);
+      // 同步成绩分析（scores 表），逻辑与 teacher.js 更新考试记录一致
+      const record = await db.get(
+        'SELECT er.student_id, er.score, e.title AS exam_title, e.subject AS exam_subject FROM exam_records er LEFT JOIN exams e ON er.exam_id = e.id WHERE er.id = ?',
+        [recId]
+      );
+      if (record && record.exam_title) {
+        await db.run('DELETE FROM scores WHERE exam_name = ? AND student_id = ?', [record.exam_title, record.student_id]);
+        if (record.score !== null && record.score !== undefined && record.score !== '') {
+          const existSubject = await db.get("SELECT subject FROM scores WHERE exam_name = ? AND subject IS NOT NULL AND subject != ? LIMIT 1", [record.exam_title, '']);
+          const subject = record.exam_subject || (existSubject ? existSubject.subject : '综合');
+          await db.run('INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
+            [record.student_id, subject, record.score, record.exam_title]);
+        }
       }
     }
 
     await db.run('UPDATE ai_grading_tasks SET adopted = 1, adopted_at = CURRENT_TIMESTAMP WHERE id = ?', [id]);
-    sendResponse(res, { id, score, exam_record_id: recId }, '已采纳到成绩');
+    sendResponse(res, { id, score, exam_record_id: recId }, isHomework ? '已采纳到作业记录' : '已采纳到成绩');
   } catch (err) {
     sendResponse(res, null, err.message, 500);
   }
