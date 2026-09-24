@@ -54,6 +54,11 @@ service.interceptors.response.use(
       (error.response && error.response.data && error.response.data.message) ||
       error.message ||
       '网络请求失败'
+    // 超时错误给中文提示（弱网/多图上传场景高发），避免把英文超时信息直接抛给用户
+    if (error.code === 'ECONNABORTED') {
+      ElMessage.error('请求超时：网络较慢或文件较大，请检查网络后重试')
+      return Promise.reject(error)
+    }
     if (message !== '取消请求') {
       ElMessage.error(message)
     }

@@ -33,3 +33,38 @@ body {
 .page-container {
   padding: 0;
 }
+
+/* ===================== 移动端适配（≤768px）===================== */
+/* 所有规则仅在窄屏生效，桌面端（>768px）样式零改动 */
+@media (max-width: 768px) {
+  /* 弹窗自适应：全项目 40+ 处 el-dialog 均为固定像素宽度（420~960px），
+     在手机屏必然溢出。统一压为 94% 宽、超高时弹窗自身滚动。
+     select / date 等下拉默认 teleport 到 body 渲染，不会被 overflow 裁剪。
+     注：本文件先于 Element Plus 样式加载，故沿用 .el-card 的 !important 惯例 */
+  .el-dialog:not(.is-fullscreen) {
+    width: 94% !important;
+    max-width: 94vw;
+    max-height: 88vh;
+    overflow-y: auto;
+  }
+
+  /* 确认框（ElMessageBox）：默认 420px，超出 360px 窄屏 */
+  .el-message-box {
+    max-width: 92vw !important;
+  }
+
+  /* iOS 修复：输入框字号小于 16px 时，聚焦会触发页面自动缩放 */
+  .el-input__inner,
+  .el-textarea__inner {
+    font-size: 16px !important;
+  }
+
+  /* 长文本下拉（试卷标题等）防止横向溢出屏幕 */
+  .el-select-dropdown {
+    max-width: 96vw !important;
+  }
+  .el-select-dropdown__item {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

@@ -1,6 +1,8 @@
 <template>
   <el-container class="layout-container">
-    <el-aside width="220px" class="aside">
+    <!-- 移动端抽屉导航遮罩：仅窄屏显示，点击关闭 -->
+    <div v-if="mobileNavOpen" class="mobile-nav-mask" @click="mobileNavOpen = false"></div>
+    <el-aside width="220px" class="aside" :class="{ 'aside-open': mobileNavOpen }">
       <div class="logo">
         <h2>教师工作台</h2>
       </div>
@@ -11,6 +13,7 @@
         text-color="#303133"
         active-text-color="#FFB84D"
         router
+        @select="onMenuSelect"
       >
         <el-menu-item index="/dashboard">
           <el-icon><Odometer /></el-icon>
@@ -92,6 +95,10 @@
     <el-container>
       <el-header class="header">
         <div class="header-left">
+          <!-- 移动端菜单按钮（桌面端隐藏，≤768px 显示），图标已由 main.js 全局注册 -->
+          <button class="menu-btn" type="button" aria-label="打开菜单" @click="mobileNavOpen = !mobileNavOpen">
+            <el-icon :size="20"><Menu /></el-icon>
+          </button>
           <span class="page-title">{{ pageTitle }}</span>
           <!-- 班级切换器：单班级时为只读标签，多班级时为下拉切换 -->
           <el-select
@@ -320,6 +327,14 @@ const route = useRoute()
 const router = useRouter()
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta.title || '工作台')
+
+// ================= 移动端抽屉导航 =================
+// 汉堡按钮仅窄屏显示（见样式），桌面端该状态恒为 false、布局不受影响
+const mobileNavOpen = ref(false)
+// el-menu 的 @select 仅在叶子菜单项激活时触发（点击子菜单标题展开时不触发），适合作为抽屉收起点
+const onMenuSelect = () => {
+  mobileNavOpen.value = false
+}
 
 // ================= 班级管理（多班级支持） =================
 const classList = ref([])
@@ -833,5 +848,90 @@ onMounted(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* ===================== 移动端适配（≤768px）===================== */
+/* 汉堡按钮与遮罩：桌面端隐藏，不参与桌面布局 */
+.menu-btn {
+  display: none;
+  border: none;
+  background: transparent;
+  padding: 4px;
+  cursor: pointer;
+  color: #303133;
+  line-height: 1;
+}
+
+.mobile-nav-mask {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .menu-btn {
+    display: inline-flex;
+  }
+
+  /* 侧边栏变为滑出式抽屉：默认移出屏幕左侧，打开时滑入（宽度沿用 el-aside 内联 220px） */
+  .aside {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .aside-open {
+    transform: translateX(0);
+    box-shadow: 2px 0 16px rgba(29, 35, 41, 0.16);
+  }
+
+  /* 遮罩铺满全屏，点击关闭抽屉 */
+  .mobile-nav-mask {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 999;
+  }
+
+  /* 顶栏：允许换行以防内容溢出；隐藏非关键的日期信息 */
+  .header {
+    height: auto;
+    min-height: 60px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .header-left {
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .page-title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 60vw;
+  }
+
+  .current-date {
+    display: none;
+  }
+
+  .class-switcher {
+    width: 132px;
+  }
+
+  /* 内容区留白收紧 */
+  .main-content {
+    padding: 12px;
+  }
 }
 </style>

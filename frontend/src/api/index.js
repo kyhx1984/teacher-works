@@ -173,7 +173,8 @@ export const testAiProvider = (id) => request.post(`/ai-grading/providers/${id}/
 // 批改任务：列表 / 创建 / 详情 / 采纳 / 删除 / 导出文档
 export const getAiTasks = (params) => request.get('/ai-grading/tasks', { params })
 export const createAiTask = (formData) =>
-  request.post('/ai-grading/tasks', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+  // 弱网下多张试卷图片上传耗时远超全局 30s 超时，此处单独放宽至 120s（仅本请求生效）
+  request.post('/ai-grading/tasks', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 })
 // 批量批改：一次为某试卷下「已有照片」的学生全部发起批改（无照片/已在跑的学生自动跳过）
 export const createAiBatchTask = (data) => request.post('/ai-grading/tasks/batch', data)
 export const getAiTask = (id) => request.get(`/ai-grading/tasks/${id}`)
