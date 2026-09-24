@@ -184,8 +184,24 @@
             <el-icon><Refresh /></el-icon>刷新
           </el-button>
         </div>
+        <!-- 筛选行：学生 / 试卷 / 状态，与积分管理等页面筛选习惯一致；变更后自动回到第一页 -->
+        <div class="filter-bar">
+          <el-select v-model="filterStudent" placeholder="按学生筛选" clearable filterable style="width: 160px" @change="resetPage">
+            <el-option v-for="s in students" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+          <el-select v-model="filterExam" placeholder="按试卷筛选" clearable filterable style="width: 200px" @change="resetPage">
+            <el-option v-for="e in exams" :key="e.id" :label="e.title" :value="e.id" />
+          </el-select>
+          <el-select v-model="filterStatus" placeholder="按状态筛选" clearable style="width: 130px" @change="resetPage">
+            <el-option label="等待中" value="pending" />
+            <el-option label="批改中" value="processing" />
+            <el-option label="已完成" value="success" />
+            <el-option label="失败" value="failed" />
+            <el-option label="已停止" value="cancelled" />
+          </el-select>
+        </div>
       </template>
-      <el-table :data="tasks" v-loading="tasksLoading" style="width: 100%" empty-text="暂无批改记录">
+      <el-table :data="pagedData" v-loading="tasksLoading" style="width: 100%" empty-text="暂无批改记录">
         <el-table-column prop="student_name" label="学生" width="100" />
         <el-table-column prop="exam_title" label="试卷" min-width="160" show-overflow-tooltip />
         <el-table-column label="状态" width="110">
@@ -239,6 +255,15 @@
           </template>
         </el-table-column>
       </el-table>
+      <!-- 前端分页：与积分管理等页面惯例一致（total + 每页条数 + 页码） -->
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[20, 50, 100]"
+        :total="filtered.length"
+        layout="total, sizes, prev, pager, next"
+        style="margin-top: 16px; justify-content: flex-end"
+      />
     </el-card>
 
     <!-- 批改详情对话框 -->
@@ -290,6 +315,17 @@
           type="error" :closable="false" show-icon
           :title="'批改失败：' + (currentTask.error || '未知错误')" style="margin-bottom: 12px"
         />
+
+        <!-- 实时输出尾窗：滚动展示模型最近生成的明文片段（约 300 字），最新内容在底部自动滚动。
+             用途：字数统计单调递增（反复吐同一段也在涨），只有明文能一眼辨出重复输出与真实进度。
+             独立于上方状态提示链（v-if/else-if），仅运行中且有内容时渲染 -->
+        <div v-if="progressTail" class="tail-box">
+          <div class="tail-head">
+            实时输出 · 最近 {{ progressTail.length }} 字 ·
+            {{ currentTask.progress && currentTask.progress.stage === 'thinking' ? '思考中' : '作答中' }}
+          </div>
+          <div ref="tailBodyRef" class="tail-body">{{ progressTail }}</div>
+        </div>
 
         <template v-if="currentTask.status === 'success'">
           <el-alert
@@ -701,7 +737,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getAiPresets, getAiConfig, saveAiConfig, testAiConnection,
@@ -718,6 +754,31 @@ const defaultPrompt = ref('')
 const exams = ref([])
 const students = ref([])
 const tasks = ref([])
+
+// ---------- 批改记录：筛选 + 前端分页（与积分管理等页面惯例一致） ----------
+// 筛选条件：学生 / 试卷 / 状态；仅影响表格展示，不改动轮询与批量进度统计（二者仍基于全量 tasks）
+const filterStudent = ref(null)
+const filterExam = ref(null)
+const filterStatus = ref(null)
+const currentPage = ref(1)
+const pageSize = ref(20)
+
+// 筛选结果（未选中任何条件时等于全量列表）
+const filtered = computed(() => tasks.value.filter(t =>
+  (!filterStudent.value || t.student_id === filterStudent.value) &&
+  (!filterExam.value || t.exam_id === filterExam.value) &&
+  (!filterStatus.value || t.status === filterStatus.value)
+))
+
+// 当前页数据切片（表格数据源）
+const pagedData = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filtered.value.slice(start, start + pageSize.value)
+})
+
+// 筛选条件变化时重置回第一页，避免停留在超出的空页
+const resetPage = () => { currentPage.value = 1 }
+
 const tasksLoading = ref(false)
 const starting = ref(false)
 
@@ -1275,6 +1336,23 @@ const progressView = computed(() => {
   }
 })
 
+// ---------- 实时输出尾窗 ----------
+// 当前阶段最近约 300 字明文（后端已截断）：运行中任务的详情弹窗里滚动展示，
+// 老师可肉眼判断「模型在写什么、是否在重复」；非运行中一律为空（不渲染）
+const progressTail = computed(() => {
+  const t = currentTask.value
+  if (!t || !isRunning(t)) return ''
+  return String((t.progress && t.progress.tail_text) || '')
+})
+
+const tailBodyRef = ref(null)
+// 尾窗内容更新时自动滚动到底部：最新的生成内容始终可见，旧内容向上滚出
+watch(progressTail, async () => {
+  await nextTick()
+  const el = tailBodyRef.value
+  if (el) el.scrollTop = el.scrollHeight
+})
+
 const stopTask = async (task) => {
   if (!task || !isRunning(task)) return
   try {
@@ -1618,6 +1696,8 @@ onBeforeUnmount(() => {
 .model-info { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #909399; }
 .card-title { font-weight: 600; }
 .card-title-row { display: flex; justify-content: space-between; align-items: center; }
+/* 批改记录筛选行：允许换行，窄屏（手机）自动堆叠不溢出 */
+.filter-bar { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .start-form { margin-bottom: 4px; }
 .answer-block { border: 1px solid #ebeef5; border-radius: 6px; padding: 10px 12px; background: #fafafa; margin-top: 12px; }
 .answer-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -1643,6 +1723,10 @@ onBeforeUnmount(() => {
 .detail-wrap > .el-alert { flex-shrink: 0; }
 /* 进行中进度条 + 停止入口：按钮与提示同一行，老师不用先滚到弹窗底部再找按钮 */
 .run-box { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; flex-shrink: 0; }
+/* 实时输出尾窗：等宽小字 + 纵向滚动（最新在底部），保留换行便于肉眼识别重复输出 */
+.tail-box { border: 1px solid #ebeef5; border-radius: 6px; background: #fafafa; overflow: hidden; margin-bottom: 12px; flex-shrink: 0; }
+.tail-head { padding: 4px 10px; font-size: 12px; color: #909399; background: #f5f7fa; border-bottom: 1px solid #ebeef5; }
+.tail-body { max-height: 132px; overflow-y: auto; padding: 8px 10px; font-family: Menlo, Consolas, 'Courier New', monospace; font-size: 12px; line-height: 1.6; color: #606266; white-space: pre-wrap; word-break: break-all; }
 .run-box .el-alert { flex: 1; min-width: 0; }
 .run-stop { flex-shrink: 0; }
 .detail-head-item { display: flex; flex-direction: column; gap: 4px; }
@@ -1692,4 +1776,20 @@ onBeforeUnmount(() => {
 .edit-label { font-size: 13px; color: #606266; }
 .edit-sum { color: #409eff; }
 .edit-score { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+
+/* ===================== 移动端适配（≤768px）===================== */
+/* 仅窄屏生效，桌面端样式零改动 */
+@media (max-width: 768px) {
+  /* 顶部状态栏与各类卡片头允许换行，避免「模型配置」等按钮被挤出屏幕 */
+  .topbar { flex-wrap: wrap; gap: 8px; }
+  .topbar-left { flex-wrap: wrap; gap: 6px; }
+  .batch-head { flex-wrap: wrap; gap: 8px; }
+  .answer-head { flex-wrap: wrap; gap: 8px; }
+  .card-title-row { flex-wrap: wrap; gap: 8px; }
+
+  /* 批改详情弹窗：图片列与题目列改为上下堆叠（窄屏放不下左右两栏） */
+  .detail-body { flex-direction: column; gap: 8px; }
+  /* 图片列不再固定 300px 宽，限制整体高度，剩余空间留给题目区滚动 */
+  .detail-left { width: auto; flex: none; max-height: 40vh; }
+}
 </style>

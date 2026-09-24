@@ -815,6 +815,10 @@ function postChatStream(url, headers, bodyStr, { idleTimeoutMs = 180000, totalTi
           // 两道自动守护线的阈值一并下发，前端据此告诉老师「还要等多久才会自动结束」
           idle_limit_seconds: Math.round(idleTimeoutMs / 1000),
           total_limit_seconds: Math.round(totalTimeoutMs / 1000),
+          // 尾窗明文：当前阶段（思考中取思考文本、作答中取正文）最近约 300 字。
+          // 前端详情弹窗实时滚动展示「模型正在写什么」，老师可肉眼快速识别重复输出与真实进度
+          // （字数统计单调递增，反复吐同一段也在涨，只有明文能一眼辨出死循环）。
+          tail_text: (cChars > 0 ? content : reasoning).slice(-300),
           text: base + (notes.length ? ` · ${notes.join('；')}` : '')
         });
       } catch (e) { /* 进度回调异常不得影响主流程 */ }
