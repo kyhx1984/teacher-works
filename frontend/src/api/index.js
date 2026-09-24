@@ -181,6 +181,9 @@ export const adoptAiTask = (id, data) => request.post(`/ai-grading/tasks/${id}/a
 export const editAiTaskResult = (id, data) => request.put(`/ai-grading/tasks/${id}/result`, data)
 export const deleteAiTask = (id) => request.delete(`/ai-grading/tasks/${id}`)
 export const cancelAiTask = (id) => request.post(`/ai-grading/tasks/${id}/cancel`)
+// 批量停止：一次停掉整批任务（传 task_ids）。不传则停止当前班级全部在跑的批改。
+// 必需的原因：批量队列是「停一个、下一个立刻接上」，逐个停止等于停不下来。
+export const cancelAiBatchTask = (taskIds) => request.post('/ai-grading/tasks/cancel-batch', { task_ids: taskIds || [] })
 export const exportAiTask = (id) => request.get(`/ai-grading/tasks/${id}/export`, { responseType: 'blob' })
 // 标准答案：读取 / 保存（answer_ref 存试卷级，一次录入多次复用）
 export const getExamAnswerRef = (examId) => request.get(`/ai-grading/exams/${examId}/answer-ref`)

@@ -1058,6 +1058,59 @@ router.post('/ai-grading/tasks/:id/cancel', async (req, res) => {
   }
 });
 
+// POST /ai-grading/tasks/cancel-batch - 批量停止批改（供「批量批改」进度面板使用）
+// 存在意义：批量发起后逐个停止是无效的——停掉正在跑的那个，队列里的下一个会立刻接上开跑，
+// 老师的主观感受就是「根本停不下来」。这里一次性把整批（或当前库全部在跑的）都停掉。
+// body: { task_ids?: (number|string)[] }；不传或为空时，停止当前班级库中所有 pending/processing 任务。
+router.post('/ai-grading/tasks/cancel-batch', async (req, res) => {
+  try {
+    const db = await getDb();
+    const rawIds = Array.isArray(req.body && req.body.task_ids) ? req.body.task_ids : [];
+    const ids = [...new Set(rawIds.map((x) => String(x).trim()).filter(Boolean))];
+
+    let targets;
+    if (ids.length) {
+      const ph = ids.map(() => '?').join(',');
+      targets = await db.all(
+        `SELECT id FROM ai_grading_tasks WHERE id IN (${ph}) AND status IN ('pending','processing')`,
+        ids
+      );
+    } else {
+      targets = await db.all("SELECT id FROM ai_grading_tasks WHERE status IN ('pending','processing')");
+    }
+
+    // ① 先让控制器生效：正在跑的立刻断开与模型的连接并结束等待；
+    //    排队中的任务标记 aborted，排到名额时会直接落库为「已停止」而不去调用模型。
+    for (const t of targets) {
+      const control = readTaskControl(t.id);
+      if (control) {
+        control.aborted = true;
+        try { control.controller.abort(); } catch (e) { /* 已结束则忽略 */ }
+      }
+    }
+
+    // ② 统一落库：条件更新兜住「停止的同一瞬间模型正好返回成功」的竞态
+    let stopped = 0;
+    if (targets.length) {
+      const ph = targets.map(() => '?').join(',');
+      const r = await db.run(
+        `UPDATE ai_grading_tasks SET status='cancelled', error=?, updated_at=CURRENT_TIMESTAMP WHERE id IN (${ph}) AND status IN ('pending','processing')`,
+        ['已手动停止批改（批量停止）', ...targets.map((t) => t.id)]
+      );
+      stopped = r && typeof r.changes === 'number' ? r.changes : targets.length;
+      for (const t of targets) taskProgress.delete(String(t.id));
+    }
+
+    sendResponse(
+      res,
+      { stopped, task_ids: targets.map((t) => t.id) },
+      stopped ? `已停止 ${stopped} 个批改任务` : '没有正在进行的批改任务'
+    );
+  } catch (err) {
+    sendResponse(res, null, err.message, 500);
+  }
+});
+
 // DELETE /ai-grading/tasks/:id - 删除任务（仅清理本功能新上传的 ai- 图片）
 router.delete('/ai-grading/tasks/:id', async (req, res) => {
   try {

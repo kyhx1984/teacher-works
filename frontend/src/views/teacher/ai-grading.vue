@@ -146,7 +146,15 @@
       <div v-if="batchVisible" class="batch-panel">
         <div class="batch-head">
           <span class="section-title">批量批改进度 · {{ batchExamTitle }}</span>
-          <el-button link type="primary" size="small" @click="closeBatch">收起</el-button>
+          <div class="batch-head-actions">
+            <el-button
+              v-if="batchProgress.pending + batchProgress.running > 0"
+              size="small" type="danger" plain
+              :loading="batchStopping"
+              @click="stopBatch"
+            >停止全部（{{ batchProgress.pending + batchProgress.running }}）</el-button>
+            <el-button link type="primary" size="small" @click="closeBatch">收起</el-button>
+          </div>
         </div>
         <el-progress
           :percentage="batchProgress.percent"
@@ -667,10 +675,10 @@
           </div>
           <div class="form-tip">
             {{ providerForm.thinking_mode === 'suppress'
-              ? '关闭思考（推荐本地 / 推理型模型）：下发 enable_thinking=false 等开关尽力关闭思考过程，并追加简洁作答指令；本地 9B 模型实测可把单次批改从十几分钟降到几分钟。若模型不支持关闭，仍由「思考上限」兜底'
+              ? '关闭思考（推荐，尤其推理型模型）：同时下发 enable_thinking=false 等多套厂商开关（覆盖 Qwen / OpenAI / Gemini / Claude 系命名），并追加简洁作答指令。实测整卷批改从「6 分钟仍不输出正文」降到 44 秒拿到完整结果。个别服务端若不认识某个扩展参数，会自动去掉后重发，不影响批改'
               : providerForm.thinking_mode === 'limited'
-                ? '限制思考：允许模型思考，但思考超过上限字数仍未作答即中止（中止前会先尝试从已有思考中提取答案）。适合想保留推理质量、又不希望无限空转的场景'
-                : '跟随模型：完全不干预思考长度——思考过程只是多占一点内存、页面也不展示，不会因此中断批改，仅受「流式总时长上限」兜底。若模型思考冗长导致等待过久，建议改为「关闭思考」' }}
+                ? '限制思考：允许模型思考，但思考超过上限字数仍未作答即中止；中止后若思考中没有可用答案，会自动改用「关闭思考」重试一次，不会白等一场。适合想保留推理质量、又不希望无限空转的场景'
+                : '跟随模型：完全不干预思考。注意：此模式下「思考上限」不生效（填了也不会被执行）——推理型模型常会持续思考数分钟仍不输出正文，实测同一张卷改用「关闭思考」只需 40 秒级即可出结果。建议只在确认模型不会陷入长思考时才使用' }}
           </div>
         </el-form-item>
         <el-form-item label="系统提示词">
@@ -699,7 +707,7 @@ import {
   getAiPresets, getAiConfig, saveAiConfig, testAiConnection,
   addAiProvider, updateAiProvider, deleteAiProvider, activateAiProvider, testAiProvider,
   getAiTasks, createAiTask, createAiBatchTask, getAiTask, adoptAiTask, editAiTaskResult, deleteAiTask, exportAiTask,
-  cancelAiTask,
+  cancelAiTask, cancelAiBatchTask,
   getExams, getStudents, getExamAnswerRef, saveExamAnswerRef, getExamRecords
 } from '../../api'
 
@@ -818,10 +826,12 @@ const onImageChange = (file, uploadFiles) => {
 
 // 大图压缩：手机拍的试卷单张常达 5~8MB，转 base64 后还要再膨胀约 1/3，
 // 会明显拉长模型的视觉编码时间（多图时首字节等待可达数分钟）并推高内存占用。
-// 只对「体积或长边超标」的 JPEG/PNG/WEBP 处理——手写小字对分辨率敏感，不能一刀切压小；
+// 只对「长边超标」的 JPEG/PNG/WEBP 缩放——手写小字对分辨率敏感，不能一刀切压小；
 // 任何一步异常或压缩后反而更大，都回退原图，保证图片数量与顺序完全不变。
-// 压缩参数（最长边 / 体积阈值 / 质量）来自「AI 模型配置」的全局图片压缩设置，可随时调整；
+// 压缩参数（最长边 / 质量）来自「AI 模型配置」的全局图片压缩设置，可随时调整；
 // 看图/图形题对分辨率敏感，可调大最长边以保留更多细节。
+// 注：threshold_mb 仍随配置下发，但仅作展示与历史兼容，不再作为「跳过压缩」的唯一门槛
+//     （只按体积判断会漏掉「体积不大、长边却严重超标」的图，见 compressImage 内注释）。
 const uploadSettings = computed(() => {
   const u = aiInfo.value?.upload
   return {
@@ -834,8 +844,12 @@ const compressImage = (file) => new Promise((resolve) => {
   const fallback = () => resolve(file)
   try {
     if (!file || !/^image\/(jpeg|png|webp)$/.test(file.type)) return fallback()
-    const { max_edge, threshold_mb, quality } = uploadSettings.value
-    if (!file.size || file.size <= threshold_mb * 1024 * 1024) return fallback()
+    const { max_edge, quality } = uploadSettings.value
+    if (!file.size) return fallback()
+    // 注意：这里**不能**按体积提前跳过。旧实现是「file.size <= threshold_mb 就原样上传」，
+    // 于是 4000×1846 / 2.5MB 这种「体积不大、但长边严重超标」的试卷图会直接发给模型，
+    // 视觉 token 约为压缩后的 3 倍，明显拖慢首字节等待与整卷批改时间。
+    // 长边是否超标必须读到图片尺寸才知道，故统一放到 onload 里判断。
     const url = URL.createObjectURL(file)
     const img = new Image()
     img.onload = () => {
@@ -844,7 +858,7 @@ const compressImage = (file) => new Promise((resolve) => {
         const h = img.naturalHeight || 0
         if (!w || !h) { URL.revokeObjectURL(url); return fallback() }
         const scale = Math.min(1, max_edge / Math.max(w, h))
-        // 尺寸本来就没超，只是体积偏大：不重绘，避免无谓的画质损失
+        // 长边本来就没超标：不重绘，避免无谓的画质损失（体积由上传接口把关：单张 10MB、合计 40MB）
         if (scale >= 1) { URL.revokeObjectURL(url); return fallback() }
         const canvas = document.createElement('canvas')
         canvas.width = Math.round(w * scale)
@@ -922,6 +936,7 @@ const batchSelectAll = ref(true)
 const batchVisible = ref(false)          // 进度面板是否显示
 const batchExamTitle = ref('')
 const batchTaskIds = ref([])             // 本次批量创建的任务 id 集合（用于进度统计，刷新后按 exam 兜底）
+const batchStopping = ref(false)         // 「停止全部」请求进行中
 
 // 打开批量预检：先选试卷，再拉该卷考试记录判断哪些学生有照片
 const openBatch = () => {
@@ -984,6 +999,33 @@ const confirmBatch = async () => {
 const closeBatch = () => {
   batchVisible.value = false
   batchTaskIds.value = []
+}
+// 一键停止整批：并发队列是「停掉当前这个、排在后面的立刻接上开跑」，
+// 因此逐个停止在批量场景下等于停不下来（老师会感觉点了停止却还在跑）。
+// 这里把整批（正在跑的 + 排队中的）一次停掉。
+const stopBatch = async () => {
+  const waiting = batchProgress.value.pending + batchProgress.value.running
+  if (!waiting) return
+  try {
+    await ElMessageBox.confirm(
+      `将停止 ${waiting} 个尚未完成的批改任务（正在批改的和排队等待的都会停止）。停止后本次结果作废，不会写入成绩；试卷图片仍保留，随时可以重新发起批改。确定停止吗？`,
+      '停止全部批改',
+      { type: 'warning', confirmButtonText: '全部停止', cancelButtonText: '继续等待' }
+    )
+  } catch (e) {
+    return
+  }
+  batchStopping.value = true
+  try {
+    // 传 task_ids 精确限定本批；若 ids 已丢失（如发起后刷新过页面）则退化为「停止当前库全部在跑的批改」
+    const r = await cancelAiBatchTask(batchTaskIds.value)
+    ElMessage.success(r && r.stopped ? `已停止 ${r.stopped} 个批改任务` : '已停止批改')
+    await loadTasks()
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    batchStopping.value = false
+  }
 }
 // 整卷进度统计：优先按本次批量创建的 task_ids 过滤，否则按当前试卷过滤
 const batchProgress = computed(() => {
@@ -1399,7 +1441,8 @@ const openAddProvider = () => {
     stream: true,          // 默认开启流式：实时进度 + 避免长等待超时
     limit_tokens: false,   // 默认不限制输出长度（推理型模型不会被截断）
     max_tokens: 8000,      // 仅在开启「限制 Tokens」时生效
-    thinking_mode: 'default',  // 默认跟随模型；本地/推理型模型建议改「关闭思考」
+    thinking_mode: 'suppress', // 默认关闭思考：实测推理型模型（含商用 flash）在「跟随模型」下会思考数分钟仍不输出正文，
+                              // 关闭后同一张卷 40 秒级即可产出完整结果。存量供应商的配置不受此默认值影响。
     reasoning_limit: 15000,    // 仅「限制思考 / 关闭思考」生效：思考超此字数仍未作答即中止（0=不限制）
     system_prompt: ''
   }
@@ -1580,6 +1623,7 @@ onBeforeUnmount(() => {
 .answer-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .batch-panel { border: 1px solid #ebeef5; border-radius: 6px; padding: 12px; background: #f7faf7; margin-top: 14px; }
 .batch-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.batch-head-actions { display: flex; align-items: center; gap: 8px; }
 .batch-stat { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
 .batch-select-list { border: 1px solid #ebeef5; border-radius: 6px; padding: 10px 12px; background: #fafafa; }
 .batch-select-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }

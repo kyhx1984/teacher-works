@@ -928,7 +928,11 @@ function resolveReasoningLimit(config) {
 // 组装请求体：max_tokens 是「要求模型最多生成多少」的上限，并非本服务作为接收端的限制。
 // 推理型模型的思考(reasoning)也计入该额度，设太小会导致思考占满额度、答案(content)为空而被截断。
 // 因此当 max_tokens<=0（用户在配置里选择「不限制」）时，直接不下发该字段，交由模型按自身上下文上限自由生成。
-function buildRequestBody(config, messages, stream) {
+function buildRequestBody(config, messages, stream, options = {}) {
+  // extended：是否一并下发「非 Qwen 命名」的思考开关（默认开）。见下方 suppress 分支说明。
+  // 若宿主服务端因未知字段拒绝（HTTP 400），callChatAttempt 会以 extended=false 重发一次，
+  // 因此这里可以放心「多键并存」。
+  const extended = options.extended !== false;
   const body = {
     model: config.model,
     messages,
@@ -948,6 +952,15 @@ function buildRequestBody(config, messages, stream) {
       kwargs.enable_thinking = false;
       // LM Studio 自定义字段命名（model.yaml 的 enableThinking），与上方互补
       body.enableThinking = false;
+      if (extended) {
+        // 面向非 Qwen 系服务端的等价开关（实测三者对同一模型都能把思考压到 0 字）：
+        //   reasoning_effort='none'  —— OpenAI / Gemini 兼容层命名
+        //   thinking.type='disabled' —— Anthropic / Claude 系命名
+        // 均为可选扩展字段，未识别的服务端会忽略；严格校验（如 OpenAI 官方）会返回 400，
+        // 由 callChatAttempt 去掉扩展字段重发兜底，不会让批改因此失败。
+        body.reasoning_effort = 'none';
+        body.thinking = { type: 'disabled' };
+      }
     }
     // 思考预算：部分模板（Seed-OSS / vLLM 系）据此限制思考长度；不支持的模板会忽略未定义变量。
     const budget = num(config.reasoning_limit, 0);
@@ -999,7 +1012,10 @@ function interpretChatResponse({ status, ok, text }, { limitedByPlatform = false
     } catch (e) { /* 保留原始文本 */ }
     // 404/405 多为路径不对（例如漏了 /v1），交给候选端点重试
     if (status === 404 || status === 405) return { kind: 'miss', hint: detail };
-    return { kind: 'fatal', error: new Error(`模型接口返回 ${status}：${detail}`) };
+    // 把状态码挂到错误上：上层据此判断「是否值得去掉扩展思考试探字段重发」（见 callChatAttempt）
+    const httpErr = new Error(`模型接口返回 ${status}：${detail}`);
+    httpErr.httpStatus = status;
+    return { kind: 'fatal', error: httpErr };
   }
   let data;
   try {
@@ -1024,6 +1040,16 @@ function interpretChatResponse({ status, ok, text }, { limitedByPlatform = false
   return decideFromContentAndReason(bodyText, choice?.finish_reason, '', limitedByPlatform);
 }
 
+// 判断一次 400 是否由「服务端不认识我们发的扩展参数」引起——只有这种情况才值得去掉扩展字段重发。
+// 反例：模型名写错（"Unsupported model xxx"）同样是 400，但重发一次毫无意义、只是白多一次请求，
+// 所以这里必须匹配到「unknown/unsupported/invalid + parameter/field/argument」这类组合才算数。
+function isUnsupportedFieldError(message) {
+  const s = str(message);
+  if (!s) return false;
+  if (/unrecognized|unexpected|not permitted/i.test(s)) return true;
+  return /(unknown|unsupported|invalid|additional)\s+(parameter|field|argument|property|key|request|body)/i.test(s);
+}
+
 // 调用 Chat Completions 的「单次尝试」：按 buildEndpointCandidates 依次尝试候选端点，命中“端点未识别”
 // 时自动换下一个（例如用户漏填 /v1）；其余错误（超时/网络/鉴权/截断）如实抛出。
 async function callChatAttempt(config, messages, { timeoutMs = 180000, idleTimeoutMs = STREAM_IDLE_TIMEOUT_MS, onProgress = null, stream, reasoningLimit, signal = null } = {}) {
@@ -1038,7 +1064,9 @@ async function callChatAttempt(config, messages, { timeoutMs = 180000, idleTimeo
   // default 默认 0（不限制，避免把正常长思考掐断），limited / suppress 用供应商 reasoning_limit。
   // 0 表示「不限思考长度」，只由流式总时长上限兜底。仅对流式生效（非流式由总时长超时兜底）。
   const rLimit = reasoningLimit !== undefined ? reasoningLimit : resolveReasoningLimit(config);
-  const bodyStr = buildRequestBody(config, messages, useStream);
+  // 扩展思考字段（reasoning_effort / thinking）是否已下发：遇到 400 时去掉重发一次，见下方 fatal 分支
+  let extendedSent = true;
+  let bodyStr = buildRequestBody(config, messages, useStream, { extended: extendedSent });
 
   const deadline = Date.now() + timeoutMs; // 多候选共享一个总超时（主要用于非流式与换端点重试）
   let lastHint = '';
@@ -1086,7 +1114,19 @@ async function callChatAttempt(config, messages, { timeoutMs = 180000, idleTimeo
       throw new Error(`无法连接模型服务：${e && e.message ? e.message : String(e)}`);
     }
     if (outcome.kind === 'content') return outcome.value;
-    if (outcome.kind === 'fatal') throw outcome.error;
+    if (outcome.kind === 'fatal') {
+      // 扩展思考字段（reasoning_effort / thinking）若被服务端判为非法参数（HTTP 400），
+      // 去掉它们原样重发一次：关闭思考本身是有价值的，不该因为多带一个可选字段就整单失败。
+      // 只降级一次，且重走同一端点（i 回退一位），不占用候选端点次序。
+      if (extendedSent && outcome.error && outcome.error.httpStatus === 400
+        && isUnsupportedFieldError(outcome.error.message)) {
+        extendedSent = false;
+        bodyStr = buildRequestBody(config, messages, useStream, { extended: false });
+        i -= 1;
+        continue;
+      }
+      throw outcome.error;
+    }
     // miss：还有候选就换下一个端点重试，否则给出可操作的地址提示
     lastHint = outcome.hint || lastHint;
     if (!isLast) continue;
@@ -1118,7 +1158,13 @@ function recoverFromReasoning(reasoningText) {
 // 是否值得「放宽上限重试」：只有平台自己下发了 max_tokens、且失败与长度/中断有关时才重试。
 // 若配置本就是「不限制」(max_tokens<=0)，重试只会重复撞模型自身上限，白白多等一轮。
 function shouldRelaxRetry(err, config, allowRelax) {
-  return !!(allowRelax && AUTO_RELAX_RETRY && err && err.relaxable && num(config.max_tokens, 0) > 0);
+  if (!allowRelax || !AUTO_RELAX_RETRY || !err || !err.relaxable) return false;
+  // 「思考失控」只可能出现在 limited / suppress 档（用户明确要限制思考、却被思考保护中止）。
+  // limited 档尤其致命：中止时思考里还没有可打捞的完整答案，而 max_tokens 通常为 0（不限），
+  // 旧条件会让它既不重试、也打捞不到 —— 必然以失败告终（实测 55 秒失败，比 default 更糟）。
+  // 故 limited 档一旦失控，改为自动降级到「关闭思考」重试一次；suppress 已是最强手段，重试无增益。
+  if (err.name === 'ReasoningRunaway') return resolveThinkingMode(config) === 'limited';
+  return num(config.max_tokens, 0) > 0;
 }
 
 // 调用 Chat Completions（对外入口）。相比单次尝试，多了两级兜底，且**只作用于原本会失败的分支**：
