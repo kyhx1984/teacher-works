@@ -1,0 +1,31 @@
+# 换行符规范化
+#
+# 背景：仓库里曾同时存在 CRLF 与 LF 两种换行符，导致两个真实问题：
+#   1. Shell 脚本是 CRLF 时，Linux 容器执行 `#!/bin/sh\r` 会报
+#      "no such file or directory"，Docker 部署直接失败。
+#   2. Windows 的 .bat 脚本若是 LF，cmd.exe 解析会出问题。
+
+# 默认：由 Git 自动判断文本文件，检出时用平台原生换行符
+* text=auto
+
+# Shell 脚本：强制 LF，任何平台检出都不许变成 CRLF（容器/Linux 执行）
+*.sh text eol=lf
+
+# Windows 批处理：强制 CRLF（cmd.exe 需要）
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件：不参与换行符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.sqlite binary
+*.xlsx binary
+*.zip binary
+*.gz binary
