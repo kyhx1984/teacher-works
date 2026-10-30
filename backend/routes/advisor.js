@@ -31,6 +31,16 @@ const sendResponse = (res, data = {}, message = 'success', code = 200) => {
   res.status(httpStatus).json({ code, message, data });
 };
 
+// 文本字段规整：Excel 数值单元格经 xlsx 解析成 JS number，写入 TEXT 列会被
+// SQLite 按浮点文本存出尾缀 .0（如联系电话 13800138000 -> 13800138000.0）。
+// 先统一转字符串，再仅对「纯整数形态的浮点文本」剥离尾部 .0；
+// 不做无条件替换，避免误伤真实含小数的文本值（如 "1.10"）。
+function normalizeText(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  return /^[+-]?\d+\.0+$/.test(s) ? s.replace(/\.0+$/, '') : s;
+}
+
 // ================= STUDENTS =================
 
 // 为已有考试记录的试卷补充该学生的考试记录（成绩为空），保证学生档案与试卷管理保持一致
@@ -70,18 +80,21 @@ router.post('/students/import', upload.single('file'), async (req, res) => {
     for (const row of data) {
       if (!row.name) continue; // skip empty rows
       const result = await db.run(
-        `INSERT INTO students (name, gender, birth, parent_name, phone, family_info, address, is_special, special_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO students (name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, grade, class)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          row.name || '',
-          row.gender || '',
-          row.birth || '',
-          row.parent_name || '',
-          row.phone || '',
-          row.family_info || '',
-          row.address || '',
+          normalizeText(row.name),
+          normalizeText(row.gender),
+          normalizeText(row.birth),
+          normalizeText(row.parent_name),
+          normalizeText(row.phone),
+          normalizeText(row.family_info),
+          normalizeText(row.address),
           row.is_special ? 1 : 0,
-          row.special_type || ''
+          normalizeText(row.special_type),
+          // 年级/班级：Excel 含该列则取该列，否则用前端传入的当前年级/班级自动填充
+          normalizeText(row.grade || req.body.grade),
+          normalizeText(row.class || req.body.class)
         ]
       );
       // 同步：为已有考试记录的试卷补充该学生的考试记录
@@ -98,14 +111,14 @@ router.post('/students/import', upload.single('file'), async (req, res) => {
 // POST /students - 新增学生（支持备注 remark 与头像 avatar）
 router.post('/students', async (req, res) => {
   try {
-    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark, avatar } = req.body;
+    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark, avatar, grade, class: className } = req.body;
     if (!name) return sendResponse(res, null, '学生姓名不能为空', 400);
     const db = await getDb();
     const result = await db.run(
-      `INSERT INTO students (name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark, avatar)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO students (name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, grade, class, remark, avatar)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [name, gender || '', birth || '', parent_name || '', phone || '', family_info || '', address || '',
-       is_special ? 1 : 0, special_type || '', remark || null, avatar || null]
+       is_special ? 1 : 0, special_type || '', grade || '', className || '', remark || null, avatar || null]
     );
     // 同步：为已有考试记录的试卷补充该学生的考试记录
     await fillMissingExamRecords(db, result.lastID);
@@ -119,14 +132,14 @@ router.post('/students', async (req, res) => {
 router.put('/students/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark, avatar } = req.body;
+    const { name, gender, birth, parent_name, phone, family_info, address, is_special, special_type, remark, avatar, grade, class: className } = req.body;
     const db = await getDb();
     const existing = await db.get('SELECT id FROM students WHERE id = ?', [id]);
     if (!existing) return sendResponse(res, null, '学生不存在', 404);
     await db.run(
-      `UPDATE students SET name=?, gender=?, birth=?, parent_name=?, phone=?, family_info=?, address=?, is_special=?, special_type=?, remark=?, avatar=? WHERE id=?`,
+      `UPDATE students SET name=?, gender=?, birth=?, parent_name=?, phone=?, family_info=?, address=?, is_special=?, special_type=?, grade=?, class=?, remark=?, avatar=? WHERE id=?`,
       [name, gender || '', birth || '', parent_name || '', phone || '', family_info || '', address || '',
-       is_special ? 1 : 0, special_type || '', remark || null, avatar || null, id]
+       is_special ? 1 : 0, special_type || '', grade || '', className || '', remark || null, avatar || null, id]
     );
     sendResponse(res, { id });
   } catch (err) {
@@ -233,7 +246,25 @@ router.get('/students/export', async (req, res) => {
   try {
     const db = await getDb();
     const rows = await db.all('SELECT * FROM students ORDER BY id ASC');
-    const worksheet = xlsx.utils.json_to_sheet(rows);
+    // 导出防御性规整文本字段（剥离历史 .0 污染，避免导出文件二次回流脏数据）。
+    // 「序号」列按循环下标生成连续行号仅供展示；id 列保留稳定主键作为回导匹配键，
+    // 不随删除/排序变化，避免历史 Excel 回导时学生错位。
+    const data = rows.map((r, i) => ({
+      '序号': i + 1,
+      ...r,
+      name: normalizeText(r.name),
+      gender: normalizeText(r.gender),
+      birth: normalizeText(r.birth),
+      parent_name: normalizeText(r.parent_name),
+      phone: normalizeText(r.phone),
+      family_info: normalizeText(r.family_info),
+      address: normalizeText(r.address),
+      special_type: normalizeText(r.special_type),
+      grade: normalizeText(r.grade),
+      class: normalizeText(r.class),
+      remark: normalizeText(r.remark)
+    }));
+    const worksheet = xlsx.utils.json_to_sheet(data);
     const workbook = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(workbook, worksheet, '学生花名册');
     const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
@@ -308,12 +339,14 @@ router.post('/scores/import', upload.single('file'), async (req, res) => {
 
     // 导入的成绩写入数据库，并同步到试卷管理的考试记录
     for (const row of data) {
-      if (!row.student_id || !row.subject || row.score === undefined) continue;
+      // 匹配键兼容：优先 student_id 列头，同时兼容「序号」「学号」两种列头（历史模板沿用「学号」）
+      const studentId = row.student_id ?? row['序号'] ?? row['学号'];
+      if (!studentId || !row.subject || row.score === undefined) continue;
       await db.run(
         'INSERT INTO scores (student_id, subject, score, exam_name) VALUES (?, ?, ?, ?)',
-        [row.student_id, row.subject, row.score, row.exam_name || '期中考试']
+        [studentId, row.subject, row.score, row.exam_name || '期中考试']
       );
-      await syncExamRecord(db, row.student_id, row.exam_name || '期中考试', row.score);
+      await syncExamRecord(db, studentId, row.exam_name || '期中考试', row.score);
       imported++;
     }
 

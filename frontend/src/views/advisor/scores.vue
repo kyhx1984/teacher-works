@@ -142,7 +142,7 @@
         <span>学生成绩分析</span>
       </template>
       <el-table :data="analysisSummary" style="width: 100%" v-loading="loading">
-        <el-table-column prop="student_id" label="学号" width="90" />
+        <el-table-column prop="student_id" label="序号" width="90" />
         <el-table-column prop="student_name" label="姓名" width="120" />
         <el-table-column prop="exam_count" label="考试次数" width="100" align="center" />
         <el-table-column prop="subject" label="科目" />
@@ -229,7 +229,7 @@
         type="info"
         :closable="false"
         show-icon
-        title="请上传包含表头的 Excel：student_id(学号)、subject(科目)、score(成绩)、exam_name(考试名称)"
+        title="请上传包含表头的 Excel：student_id(序号)、subject(科目)、score(成绩)、exam_name(考试名称)；兼容「序号」「学号」两种列头"
       />
       <el-upload
         ref="importUploadRef"

@@ -38,7 +38,7 @@
 
       <el-table :data="pagedData" style="width: 100%" v-loading="loading" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="id" label="学号" width="80" />
+        <el-table-column type="index" label="序号" width="80" :index="serialIndex" />
         <el-table-column label="头像" width="70" align="center">
           <template #default="scope">
             <el-avatar :size="36" :src="avatarSrc(scope.row.avatar) || undefined">
@@ -154,10 +154,15 @@
           <el-input v-model="form.family_info" placeholder="家庭成员、经济状况等" />
         </el-form-item>
         <el-form-item label="年级">
-          <el-input v-model="form.grade" placeholder="如：一年级" />
+          <el-select v-model="form.grade" placeholder="选择年级" style="width: 100%">
+            <el-option v-for="g in gradeOptions" :key="g" :label="g" :value="g" />
+          </el-select>
         </el-form-item>
         <el-form-item label="班级">
-          <el-input v-model="form.class" placeholder="如：1班" />
+          <el-select v-model="form.class" placeholder="选择班级" style="width: 100%">
+            <el-option v-for="c in classOptions" :key="c" :label="c" :value="c" />
+          </el-select>
+          <div class="form-tip">默认自动带出当前年级与当前班级，可手动修改</div>
         </el-form-item>
         <el-form-item label="特殊情况">
           <el-switch v-model="form.is_special" :active-value="1" :inactive-value="0" />
@@ -187,7 +192,7 @@
         type="info"
         :closable="false"
         show-icon
-        title="请上传包含以下表头的 Excel：name(姓名)、gender(性别)、birth(出生年月)、parent_name(家长姓名)、phone(联系电话)、family_info(家庭情况)、address(地址)、special_type(特殊情况)"
+        title="请上传包含以下表头的 Excel：name(姓名)、gender(性别)、birth(出生年月)、parent_name(家长姓名)、phone(联系电话)、family_info(家庭情况)、address(地址)、special_type(特殊情况)、grade(年级)、class(班级)；年级/班级列可省略，省略时自动填充当前年级与当前班级"
       />
       <el-upload
         ref="importUploadRef"
@@ -219,7 +224,7 @@
         </el-avatar>
       </div>
       <el-descriptions :column="2" border v-if="detail">
-        <el-descriptions-item label="学号">{{ detail.id }}</el-descriptions-item>
+        <el-descriptions-item label="序号">{{ detailSerial }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ detail.name }}</el-descriptions-item>
         <el-descriptions-item label="性别">{{ detail.gender }}</el-descriptions-item>
         <el-descriptions-item label="出生年月">{{ detail.birth }}</el-descriptions-item>
@@ -248,7 +253,9 @@ import {
   batchDeleteStudents,
   importStudents,
   exportStudents,
-  uploadStudentAvatar
+  uploadStudentAvatar,
+  getClasses,
+  getGradeInfo
 } from '../../api'
 
 const loading = ref(false)
@@ -279,6 +286,33 @@ const pagedData = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return filtered.value.slice(start, start + pageSize.value)
 })
+
+// 序号列：基于过滤后列表的连续行号（跨分页连续），仅展示用，与数据库 id 无关
+const serialIndex = (idx) => (currentPage.value - 1) * pageSize.value + idx + 1
+
+// 详情弹窗展示的序号（与列表行号保持一致）
+const detailSerial = ref(0)
+
+// 年级/班级自动填充：默认取全局年级设置与当前班级，允许手动修改
+const gradeOptions = ['一年级', '二年级', '三年级', '四年级', '五年级', '六年级']
+const classOptions = ref([])
+const defaultGrade = ref('')
+const defaultClass = ref('')
+const loadGradeClassDefaults = async () => {
+  try {
+    const [gradeRes, classes] = await Promise.all([getGradeInfo(), getClasses()])
+    defaultGrade.value = gradeRes?.grade_level || ''
+    classOptions.value = (classes || []).map((c) => c.name)
+    const savedId = parseInt(localStorage.getItem('currentClassId'), 10)
+    const cur =
+      (classes || []).find((c) => c.id === savedId) ||
+      (classes || []).find((c) => c.is_default) ||
+      (classes || [])[0]
+    defaultClass.value = cur?.name || ''
+  } catch (e) {
+    // 拦截器已提示；默认值为空时不阻断表单
+  }
+}
 
 const form = ref({
   id: null,
@@ -391,6 +425,9 @@ const onAvatarRemove = () => {
 
 const openCreate = () => {
   resetForm()
+  // 年级/班级自动带出当前年级与当前班级（可手动修改）
+  form.value.grade = defaultGrade.value
+  form.value.class = defaultClass.value
   dialogVisible.value = true
   nextTick(() => {
     formRef.value?.clearValidate()
@@ -410,6 +447,7 @@ const openEdit = (row) => {
 
 const viewDetail = (row) => {
   detail.value = row
+  detailSerial.value = filtered.value.indexOf(row) + 1
   detailVisible.value = true
 }
 
@@ -513,6 +551,9 @@ const handleImport = async () => {
   try {
     const fd = new FormData()
     fd.append('file', importFile.value)
+    // 年级/班级默认值：Excel 无对应列时后端按当前年级/班级自动填充
+    fd.append('grade', defaultGrade.value)
+    fd.append('class', defaultClass.value)
     const data = await importStudents(fd)
     ElMessage.success(`成功导入 ${data.imported} 名学生`)
     importVisible.value = false
@@ -545,7 +586,10 @@ const handleExport = async () => {
   }
 }
 
-onMounted(loadStudents)
+onMounted(() => {
+  loadStudents()
+  loadGradeClassDefaults()
+})
 </script>
 
 <style scoped>

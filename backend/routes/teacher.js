@@ -398,7 +398,7 @@ router.get('/exam-records/template', async (req, res) => {
     
     // 构建数据
     const data = students.map(s => ({
-      '学号': s.id,
+      '序号': s.id,
       '姓名': s.name,
       '成绩': '',
       '评语': '',
@@ -411,7 +411,7 @@ router.get('/exam-records/template', async (req, res) => {
     
     // 设置列宽
     ws['!cols'] = [
-      { wch: 10 }, // 学号
+      { wch: 10 }, // 序号
       { wch: 15 }, // 姓名
       { wch: 10 }, // 成绩
       { wch: 30 }, // 评语
@@ -450,7 +450,7 @@ router.get('/exam-records/export', async (req, res) => {
     
     // 构建数据
     const data = records.map(r => ({
-      '学号': r.student_id,
+      '序号': r.student_id,
       '姓名': r.student_name,
       '成绩': r.score,
       '评语': r.comment || '',
@@ -463,7 +463,7 @@ router.get('/exam-records/export', async (req, res) => {
     
     // 设置列宽
     ws['!cols'] = [
-      { wch: 10 }, // 学号
+      { wch: 10 }, // 序号
       { wch: 15 }, // 姓名
       { wch: 10 }, // 成绩
       { wch: 30 }, // 评语
@@ -483,7 +483,7 @@ router.get('/exam-records/export', async (req, res) => {
       const qs = d && Array.isArray(d.questions) ? d.questions : [];
       for (const q of qs) {
         detailRows.push({
-          '学号': r.student_id,
+          '序号': r.student_id,
           '姓名': r.student_name,
           '题号': q.no,
           '题目': q.question,
@@ -498,7 +498,7 @@ router.get('/exam-records/export', async (req, res) => {
     if (detailRows.length) {
       const ws2 = xlsx.utils.json_to_sheet(detailRows);
       ws2['!cols'] = [
-        { wch: 10 }, // 学号
+        { wch: 10 }, // 序号
         { wch: 15 }, // 姓名
         { wch: 8 },  // 题号
         { wch: 30 }, // 题目
@@ -542,7 +542,8 @@ router.post('/exam-records/import', upload.single('file'), async (req, res) => {
     let updated = 0;
 
     for (const row of data) {
-      const studentId = row['学号'];
+      // 匹配键兼容：新模板/导出列头为「序号」，历史文件沿用「学号」，两列均存学生 id
+      const studentId = row['序号'] ?? row['学号'];
       const score = row['成绩'];
       const comment = row['评语'] || '';
       const remark = row['备注'] || '';
